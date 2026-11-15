@@ -35,8 +35,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if job["status"] == "completed" else 1
     if a.cmd == "serve":
         from .server import serve
+        import os
+        # Operator opt-in for intranet tooling (SSRF guard stays on by
+        # default): CROW_OS_ALLOW_PRIVATE_TOOLS=1 crow serve
+        kernel = Kernel(home, allow_private_tools=os.environ.get(
+            "CROW_OS_ALLOW_PRIVATE_TOOLS") == "1")
         try:
-            return serve(Kernel(home), a.port)
+            return serve(kernel, a.port)
         except OSError as e:
             print(f"cannot serve on port {a.port}: {e}")
             return 2

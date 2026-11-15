@@ -11,10 +11,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import re
+
 from .capabilities import Broker, CapabilityError
 from .ledger import Ledger
 from .llm import LLMUnavailable, OllamaClient
+from .tools import ToolError, ToolRunner
 from .workflow import Workflow
+
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 
 PROMPTS = {
     "debugger": ("You are the debugger/planner in a 4-role chain. "
@@ -31,11 +36,12 @@ class WorkerError(Exception):
 
 class LLMWorker:
     def __init__(self, broker: Broker, workflow: Workflow, ledger: Ledger,
-                 client: OllamaClient):
+                 client: OllamaClient, tools: ToolRunner | None = None):
         self.broker = broker
         self.workflow = workflow
         self.ledger = ledger
         self.client = client
+        self.tools = tools
 
     def run(self, objective: str, cap: dict[str, Any],
             outputs: dict | None = None,
@@ -59,14 +65,26 @@ class LLMWorker:
             if state["status"] == "failed":
                 return state
 
-            # coder (LLM)
+            # coder (LLM) — with network tooling when the objective
+            # names a URL: the fetch is capability-gated, SSRF-guarded
+            # and written to the ledger before the model ever sees it.
             role = "coder"
             self.broker.authorize(cap, "EXECUTE", "jobs.coder")
+            context = ""
+            url_match = _URL_RE.search(objective)
+            if url_match and self.tools is not None:
+                fetched = self.tools.fetch(url_match.group(0))
+                self.ledger.append("crow-os/tools", "tool.invoked", {
+                    "job_id": job_id, "tool": fetched["tool"],
+                    "host": fetched["host"], "status": fetched["status"],
+                    "bytes": fetched["bytes"]})
+                context = (f"\nFetched context from {fetched['url']} "
+                           f"(status {fetched['status']}):\n{fetched['excerpt']}\n")
             if outputs is not None:
                 outputs[job_id]["live"] = ""
             artifact = self.client.chat_stream(
                 PROMPTS["coder"],
-                f"Objective: {objective}\nPlan:\n{plan}\n"
+                f"Objective: {objective}\nPlan:\n{plan}\n{context}"
                 f"Plan reference line: plan:{job_id}",
                 on_token=(lambda t: outputs[job_id].__setitem__(
                     "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
@@ -92,7 +110,7 @@ class LLMWorker:
             verdict = self.ledger.verify()
             self.workflow.report(job_id, "governance", verdict["ok"],
                                  f"ledger ok={verdict['ok']}")
-        except (CapabilityError, LLMUnavailable) as e:
+        except (CapabilityError, LLMUnavailable, ToolError) as e:
             if self.workflow.get(job_id)["status"] == "running":
                 self.workflow.report(job_id, role, False,
                                      f"{type(e).__name__}: {e}")

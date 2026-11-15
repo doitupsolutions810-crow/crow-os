@@ -25,7 +25,7 @@ SECRET_FILE = "broker.secret"
 
 
 class Kernel:
-    def __init__(self, home: Path):
+    def __init__(self, home: Path, *, allow_private_tools: bool = False):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
         secret_path = self.home / SECRET_FILE
@@ -42,6 +42,10 @@ class Kernel:
         self.broker = Broker(secret, state_path=self.home / "broker_state.json")
         self.workflow = Workflow(self.ledger)
         self.outputs: dict[str, dict[str, str]] = {}  # job_id -> plan/artifact (for the Home Screen code view)
+        # Operator's explicit choice: may agent tools reach non-public
+        # addresses (intranet)? Default NO — the SSRF guard refuses
+        # loopback/RFC1918/link-local/metadata destinations.
+        self.allow_private_tools = allow_private_tools
 
     def run_llm(self, objective: str, model: str | None = None,
                 base_url: str | None = None,
@@ -52,9 +56,14 @@ class Kernel:
         cap = self.broker.issue(
             "crow-os/kernel",
             [{"method": "EXECUTE", "resource": "jobs.debugger"},
-             {"method": "EXECUTE", "resource": "jobs.coder"}],
+             {"method": "EXECUTE", "resource": "jobs.coder"},
+             {"method": "TOOL", "resource": "net.fetch"},
+             {"method": "TOOL", "resource": "net.resolve"}],
             ttl_seconds=900, rate_limit=10)
-        worker = LLMWorker(self.broker, self.workflow, self.ledger, client)
+        from .tools import ToolRunner
+        worker = LLMWorker(self.broker, self.workflow, self.ledger, client,
+                           tools=ToolRunner(self.broker, cap,
+                                            allow_private=self.allow_private_tools))
         return worker.run(objective, cap, outputs=self.outputs, job_id=job_id)
 
     def run_demo(self, objective: str,

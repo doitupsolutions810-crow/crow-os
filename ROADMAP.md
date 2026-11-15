@@ -48,11 +48,25 @@ audit failure it prevents.
 - Ledger reads take a shared lock: unlocked reads racing appends
   could observe torn lines and strand jobs under load.
 
-## v0.6 — fleet
+## v0.6 — network-connected tooling (shipped)
+
+- Agents get real network tools, built like everything else here:
+  capability-gated (`TOOL net.fetch` / `TOOL net.resolve`, checked
+  before any socket opens), SSRF-guarded (http/https only; the host's
+  resolved IPs must all be public — loopback, RFC1918, link-local,
+  metadata and benchmarking ranges refused; redirects re-validated
+  hop by hop), bounded (10s timeout, 64KB read cap), and attested
+  (every invocation lands in the signed ledger as tool.invoked).
+- When a chat objective names a URL, the coder fetches it through the
+  tool and builds on the fetched context. Intranet destinations need
+  the operator's explicit opt-in (Kernel allow_private_tools /
+  CROW_OS_ALLOW_PRIVATE_TOOLS=1); the default posture refuses them.
+
+## v0.7 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
-## v0.7 — federation
+## v0.8 — federation
 - mTLS peer links (living-intermediate's verified design), digest-checked
   ingest — no unauthenticated peers
 
