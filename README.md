@@ -29,16 +29,22 @@ inverts that priority order:
   Ed25519 signer interface is the production swap)
 - `src/crow_os/workflow.py` — role-checked job chain
 - `src/crow_os/runtime.py` — kernel tying ledger + capabilities + workflow
+- `src/crow_os/signers.py` — HMAC dev signer + Ed25519 production signer
+- `src/crow_os/llm.py` / `worker.py` — Ollama client and the
+  capability-gated LLM worker (v0.2)
 - `src/crow_os/cli.py` — `crow` command line
 
 ## Run
 
 ```bash
 PYTHONPATH=src python3 -m crow_os demo --home /tmp/crow-home
+# LLM-backed run (local Ollama; model via --model or CROW_OS_MODEL,
+# default qwen2.5-coder:32b; endpoint via --ollama or OLLAMA_HOST):
+crow --home /tmp/crow-home run --objective "build the OS"
 PYTHONPATH=src python3 -m crow_os verify --home /tmp/crow-home
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-Status: v0.1 kernel. Deliberately small — the kernel proves the trust
+Status: v0.2 — kernel + Ollama worker behind the capability gate. Deliberately small — the kernel proves the trust
 invariants first; LLM agents, fleet dispatch and federation plug in
 behind the same capability and ledger contracts.

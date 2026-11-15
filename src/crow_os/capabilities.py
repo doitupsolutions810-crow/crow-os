@@ -14,16 +14,11 @@ Ed25519 signer behind the same issue/verify contract.
 from __future__ import annotations
 
 import copy
-import hashlib
-import hmac
-import json
 import time
 import uuid
 from typing import Any
 
-
-def _canon(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+from .signers import HmacSigner, Signer
 
 
 class CapabilityError(Exception):
@@ -31,10 +26,12 @@ class CapabilityError(Exception):
 
 
 class Broker:
-    def __init__(self, secret: bytes):
-        if len(secret) < 16:
-            raise CapabilityError("secret too short")
-        self._secret = secret
+    def __init__(self, secret: bytes | None = None, *, signer: Signer | None = None):
+        if signer is None:
+            if secret is None:
+                raise CapabilityError("Broker needs a secret or a signer")
+            signer = HmacSigner(secret)
+        self._signer = signer
         self._revoked: set[str] = set()
         self._lineage: dict[str, str] = {}   # cap_id -> root_id
         self._usage: dict[str, int] = {}     # root_id -> executions
@@ -42,7 +39,7 @@ class Broker:
 
     def _sign(self, cap: dict[str, Any]) -> str:
         body = {k: v for k, v in cap.items() if k != "sig"}
-        return hmac.new(self._secret, _canon(body).encode(), hashlib.sha256).hexdigest()
+        return self._signer.sign(body)
 
     def issue(self, subject: str, rights: list[dict[str, str]], *,
               ttl_seconds: int = 300, rate_limit: int = 5,
@@ -78,7 +75,8 @@ class Broker:
         return cap
 
     def _check_signature(self, cap: dict[str, Any]) -> None:
-        if not hmac.compare_digest(self._sign(cap), cap.get("sig", "")):
+        body = {k: v for k, v in cap.items() if k != "sig"}
+        if not self._signer.verify(body, cap.get("sig", "")):
             raise CapabilityError("bad signature")
 
     def revoke(self, cap_id: str) -> None:

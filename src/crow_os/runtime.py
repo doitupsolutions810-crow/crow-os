@@ -15,7 +15,9 @@ from typing import Any
 
 from .capabilities import Broker
 from .ledger import Ledger
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
 from .workflow import Workflow
+from .worker import LLMWorker
 
 SECRET_FILE = "broker.secret"
 
@@ -31,6 +33,19 @@ class Kernel:
                 f"crow-os:{self.home.resolve()}".encode()).digest())
         self.broker = Broker(secret_path.read_bytes())
         self.workflow = Workflow(self.ledger)
+
+    def run_llm(self, objective: str, model: str | None = None,
+                base_url: str | None = None) -> dict[str, Any]:
+        """Full chain with an LLM behind the capability gate (v0.2)."""
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or DEFAULT_MODEL)
+        cap = self.broker.issue(
+            "crow-os/kernel",
+            [{"method": "EXECUTE", "resource": "jobs.debugger"},
+             {"method": "EXECUTE", "resource": "jobs.coder"}],
+            ttl_seconds=900, rate_limit=10)
+        worker = LLMWorker(self.broker, self.workflow, self.ledger, client)
+        return worker.run(objective, cap)
 
     def run_demo(self, objective: str) -> dict[str, Any]:
         cap = self.broker.issue(
