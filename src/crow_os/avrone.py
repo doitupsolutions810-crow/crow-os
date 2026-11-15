@@ -111,8 +111,8 @@ def _read(path: Path) -> tuple[list[dict[str, Any]], str]:
     for i, line in enumerate(raw.splitlines(), 1):
         if not line.strip():
             continue
-        if len(line) > MAX_LINE_BYTES or len(rows) >= MAX_POSTS:
-            raise AvroneImportError("AVRONE journal exceeds record budget")
+        if len(line) > MAX_LINE_BYTES:
+            raise AvroneImportError("AVRONE journal exceeds line budget")
         try:
             data = json.loads(line)
         except (ValueError, RecursionError, UnicodeError) as e:
@@ -124,6 +124,8 @@ def _read(path: Path) -> tuple[list[dict[str, Any]], str]:
                 raise AvroneImportError("invalid AVRONE tombstone record")
             tombstones.update(ids)
             continue
+        if len(rows) >= MAX_POSTS:
+            raise AvroneImportError("AVRONE journal exceeds post budget")
         rows.append(_post(data))
     return [row for row in rows if row["id"] not in tombstones], hashlib.sha256(raw).hexdigest()
 
@@ -141,22 +143,38 @@ def import_avrone_journal(kernel: Any, path: str | Path) -> dict[str, Any]:
         verdict = kernel.ledger.verify()
         if not verdict.get("ok"):
             raise AvroneImportError("Crow OS ledger verification failed before import")
-        seen = set()
-        for e in kernel.ledger.read():
-            if e.get("kind") != "avrone.observation":
+        # Preflight the entire admission batch. A reused immutable identity
+        # must not silently shadow contradictory findings or override prior
+        # signed evidence, even if the conflict occurs after valid new rows.
+        fields = ("id", "run_id", "kind", "text", "agent", "origin_node", "refs")
+        known: dict[tuple[str, str], dict[str, Any]] = {}
+        for entry in kernel.ledger.read():
+            if entry.get("kind") != "avrone.observation":
                 continue
-            body = e.get("raw") or {}
-            seen.add((body.get("run_id"), body.get("id")))
-        accepted, duplicates = 0, 0
+            body = entry.get("raw")
+            if not isinstance(body, dict):
+                raise AvroneImportError("invalid existing AVRONE evidence")
+            prior = {field: body.get(field) for field in fields}
+            key = (prior["run_id"], prior["id"])
+            if not all(isinstance(v, str) for v in key):
+                raise AvroneImportError("invalid existing AVRONE identity")
+            if key in known and known[key] != prior:
+                raise AvroneImportError("conflicting existing AVRONE evidence")
+            known[key] = prior
+        staged: list[dict[str, Any]] = []
+        duplicates = 0
         for row in rows:
             key = (row["run_id"], row["id"])
-            if key in seen:
+            if key in known:
+                if known[key] != row:
+                    raise AvroneImportError("conflicting AVRONE post identity")
                 duplicates += 1
                 continue
+            known[key] = row
+            staged.append(row)
+        for row in staged:
             body = {**row, "untrusted": True, "source_file": source.name,
                     "source_sha256": digest}
             kernel.ledger.append("integration/avrone", "avrone.observation", body)
-            seen.add(key)
-            accepted += 1
-        return {"accepted": accepted, "duplicates": duplicates,
+        return {"accepted": len(staged), "duplicates": duplicates,
                 "source_sha256": digest, "ledger_ok": kernel.ledger.verify()["ok"]}
