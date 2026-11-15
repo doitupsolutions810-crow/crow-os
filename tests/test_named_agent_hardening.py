@@ -8,6 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
 from crow_os.agents import AgentError, AgentRegistry
 from crow_os.capabilities import Broker
 from crow_os.fs import CrowFS
