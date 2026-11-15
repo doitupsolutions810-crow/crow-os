@@ -22,7 +22,7 @@ from .plugins import PluginRegistry
 from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient, resolve_model  # noqa: F401
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
 from .workflow import Workflow
 from .worker import LLMWorker
 
@@ -83,8 +83,8 @@ class Kernel:
                 job_id: str | None = None,
                 tools_enabled: bool = True) -> dict[str, Any]:
         """Full chain with an LLM behind the capability gate (v0.2)."""
-        base = base_url or DEFAULT_BASE
-        client = OllamaClient(base_url=base, model=resolve_model(model, base))
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or DEFAULT_MODEL)
         cap = self.broker.issue(
             "crow-os/kernel",
             [{"method": "EXECUTE", "resource": "jobs.debugger"},
@@ -140,8 +140,8 @@ class Kernel:
                    for t in agent.get("tools") or []]
         cap = self.broker.issue("crow-os/kernel", rights,
                                 ttl_seconds=900, rate_limit=20)
-        base = base_url or DEFAULT_BASE
-        client = OllamaClient(base_url=base, model=resolve_model(model or agent.get("model"), base))
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or agent.get("model") or DEFAULT_MODEL)
         from .tools import ToolRunner
         tools = ToolRunner(self.broker, cap,
                            allow_private=self.allow_private_tools) \
@@ -161,6 +161,77 @@ class Kernel:
         if job["status"] == "completed":
             self._persist_artifact(job["job_id"])
         return job
+
+    def transcript(self, job_id: str) -> str:
+        """Export one job as a Markdown transcript: the chat (the
+        user's objective), every agent output, tool invocations,
+        sub-agent links, and the governance verdict — assembled from
+        the workflow record, the outputs sink, and the signed ledger,
+        so what you export is what was attested."""
+        from .workflow import WorkflowError
+        try:
+            job = self.workflow.get(job_id)
+        except WorkflowError as e:
+            raise KeyError(job_id) from e
+        out = dict(self.outputs.get(job_id) or {})
+        if not out.get("artifact"):
+            # Outputs are in-memory; the artifact itself is persisted
+            # to Documents at completion, so a transcript after a
+            # restart still carries the agent's output.
+            try:
+                out["artifact"] = self.fs.read_file(
+                    f"/home/user/Documents/{job_id}.md")
+                out["saved_to"] = f"/home/user/Documents/{job_id}.md"
+            except Exception:  # noqa: BLE001 - no artifact persisted
+                pass
+        entries = [e for e in self.ledger.read()
+                   if e["raw"].get("job_id") == job_id
+                   or e["raw"].get("parent_job_id") == job_id
+                   or e["raw"].get("child_job_id") == job_id]
+        lines = [f"# Chat transcript — job {job_id}", "",
+                 f"- Status: **{job['status']}**",
+                 f"- Chain: {' → '.join(job.get('chain') or [])}",
+                 f"- Ledger entries: {len(entries)}", ""]
+        if out.get("agent"):
+            lines.append(f"**Agent:** {out['agent']}")
+        lines += ["## 🧑 User", "", job["objective"], ""]
+        if out.get("plan"):
+            lines += ["## 🐛 Debugger — plan", "", out["plan"], ""]
+        if out.get("artifact"):
+            who = out.get("agent") or "Coder"
+            lines += [f"## 🤖 {who} — output", "", out["artifact"], ""]
+        for e in entries:
+            raw = e["raw"]
+            if e["kind"] == "tool.invoked":
+                lines.append(f"- 🔧 `{raw.get('tool')}` "
+                             f"{raw.get('host') or raw.get('path') or ''} "
+                             f"→ {raw.get('status', 'ok')}")
+            elif e["kind"] == "agent.spawned":
+                if raw.get("child_job_id") == job_id:
+                    lines.append(f"- ⤵ spawned by parent job "
+                                 f"{raw.get('parent_job_id')} (depth {raw.get('depth')})")
+                else:
+                    lines.append(f"- ⤵ spawned sub-agent **{raw.get('agent')}** "
+                                 f"(job {raw.get('child_job_id')}, depth {raw.get('depth')})")
+        if out.get("subagents"):
+            lines += ["", "## ⤵ Sub-agents"]
+            for sub in out["subagents"]:
+                if "error" in sub:
+                    lines.append(f"- **{sub['agent']}** — refused: {sub['error']}")
+                else:
+                    lines.append(f"- **{sub['agent']}** — job {sub['job_id']}: {sub['status']}")
+        steps = [e for e in entries if e["kind"] in ("job.step", "job.failed")]
+        if steps:
+            lines += ["", "## Steps"]
+            for e in steps:
+                raw = e["raw"]
+                lines.append(f"- {raw.get('role')}: {raw.get('note')}")
+        if out.get("saved_to"):
+            lines += ["", f"Artifact saved to `{out['saved_to']}`"]
+        if job["status"] == "running":
+            lines += ["", "_⏳ This run is still in progress — the transcript "
+                          "is partial._"]
+        return "\n".join(lines) + "\n"
 
     def computer_info(self) -> dict[str, Any]:
         """The Bot Computer page: the one computer the agents share —

@@ -50,19 +50,6 @@ class AgentError(Exception):
     pass
 
 
-_CTRL = re.compile(r"[\x00-\x1f\x7f]")
-_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
-_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
-
-
-def _check_id(agent_id: Any) -> str:
-    """Agent ids are slugs. Anything else ('../../home/x', a list, None) names no
-    agent; before this, get() read any .json in the user FS as an agent definition."""
-    if not isinstance(agent_id, str) or not _ID_RE.match(agent_id):
-        raise AgentError(f"unknown agent: {str(agent_id)[:80]!r}")
-    return agent_id
-
-
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug or "agent"
@@ -79,16 +66,6 @@ class AgentRegistry:
                avatar: dict[str, str] | None = None) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise AgentError("agent name is required")
-        if _CTRL.search(name):
-            raise AgentError("agent name must not contain control characters")
-        if isinstance(instructions, str) and _CTRL.search(instructions.replace("\n", "").replace("\t", "")):
-            raise AgentError("instructions must not contain control characters")
-        if model is not None and (not isinstance(model, str) or not _MODEL_RE.match(model)):
-            raise AgentError("model must be an Ollama model name like 'qwen2.5:3b'")
-        if tools is not None and not isinstance(tools, list):
-            raise AgentError("tools must be a list of tool names")
-        if avatar is not None and not isinstance(avatar, dict):
-            raise AgentError("avatar must be an object with shape and color")
         name = name.strip()
         if len(name) > MAX_NAME:
             raise AgentError(f"name too long (max {MAX_NAME} chars)")
@@ -130,14 +107,11 @@ class AgentRegistry:
 
     def get(self, agent_id: str) -> dict[str, Any]:
         try:
-            agent = json.loads(self.fs.read_file(f"{AGENTS_DIR}/{_check_id(agent_id)}.json"))
+            return json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
         except FSError:
             raise AgentError(f"unknown agent: {agent_id}") from None
         except json.JSONDecodeError:
             raise AgentError(f"corrupt agent definition: {agent_id}") from None
-        if not isinstance(agent, dict) or not isinstance(agent.get("instructions"), str):
-            raise AgentError(f"corrupt agent definition: {agent_id}")
-        return agent
 
     def list(self) -> list[dict[str, Any]]:
         out = []
@@ -147,10 +121,10 @@ class AgentRegistry:
                     out.append(self.get(e["name"][:-5]))
                 except AgentError:
                     continue
-        return sorted(out, key=lambda a: a.get("created") if isinstance(a.get("created"), (int, float)) else 0)
+        return sorted(out, key=lambda a: a["created"])
 
     def delete(self, agent_id: str) -> None:
-        real = self.fs.resolve(f"{AGENTS_DIR}/{_check_id(agent_id)}.json")
-        if not real.is_file():
+        real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
+        if not real.exists():
             raise AgentError(f"unknown agent: {agent_id}")
         real.unlink()
