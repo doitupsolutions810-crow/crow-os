@@ -33,6 +33,10 @@ from typing import Any
 
 from .fs import CrowFS, FSError
 from .tools import TOOLS
+from .connectors import CONNECTOR_TOOLS
+
+TRUSTED_CONNECTOR_TOOLS = frozenset(
+    t for group in CONNECTOR_TOOLS.values() for t in group)
 
 AGENTS_DIR = "/system/agents"
 MAX_NAME = 60
@@ -113,7 +117,8 @@ class AgentRegistry:
     def create(self, name: str, instructions: str,
                model: str | None = None,
                tools: list[str] | None = None,
-               avatar: dict[str, str] | None = None) -> dict[str, Any]:
+               avatar: dict[str, str] | None = None,
+               extra_tools: list[str] | None = None) -> dict[str, Any]:
         name = _clean_text(name, "agent name", MAX_NAME)
         instructions = _clean_text(
             instructions, "custom instructions", MAX_INSTRUCTIONS, multiline=True)
@@ -127,9 +132,16 @@ class AgentRegistry:
             tools = []
         if not isinstance(tools, (list, tuple)):
             raise AgentError("tools must be a list of approved tool names")
+        if extra_tools is None:
+            extra_tools = []
+        if (not isinstance(extra_tools, (list, tuple)) or
+                any(not isinstance(t, str) or t not in TRUSTED_CONNECTOR_TOOLS
+                    for t in extra_tools)):
+            raise AgentError("invalid approved connector tool list")
+        catalog = set(TOOLS).union(extra_tools)
         grants = []
         for t in tools:
-            if not isinstance(t, str) or t not in TOOLS:
+            if not isinstance(t, str) or t not in catalog:
                 raise AgentError(f"unknown tool: {t!r}")
             if t not in grants:
                 grants.append(t)
@@ -179,7 +191,9 @@ class AgentRegistry:
                 not 0 <= created <= 10_000_000_000_000 or
                 (type(created) is float and not math.isfinite(created)) or
                 not isinstance(agent.get("tools"), list) or
-                any(not isinstance(t, str) or t not in TOOLS for t in agent["tools"]) or
+                any(not isinstance(t, str) or
+                    (t not in TOOLS and t not in TRUSTED_CONNECTOR_TOOLS)
+                    for t in agent["tools"]) or
                 (agent.get("model") is not None and
                  (not isinstance(agent["model"], str) or
                   any(ch.isspace() for ch in agent["model"])))):
