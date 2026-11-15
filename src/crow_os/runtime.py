@@ -44,7 +44,8 @@ class Kernel:
         self.outputs: dict[str, dict[str, str]] = {}  # job_id -> plan/artifact (for the Home Screen code view)
 
     def run_llm(self, objective: str, model: str | None = None,
-                base_url: str | None = None) -> dict[str, Any]:
+                base_url: str | None = None,
+                job_id: str | None = None) -> dict[str, Any]:
         """Full chain with an LLM behind the capability gate (v0.2)."""
         client = OllamaClient(base_url=base_url or DEFAULT_BASE,
                               model=model or DEFAULT_MODEL)
@@ -54,14 +55,18 @@ class Kernel:
              {"method": "EXECUTE", "resource": "jobs.coder"}],
             ttl_seconds=900, rate_limit=10)
         worker = LLMWorker(self.broker, self.workflow, self.ledger, client)
-        return worker.run(objective, cap, outputs=self.outputs)
+        return worker.run(objective, cap, outputs=self.outputs, job_id=job_id)
 
-    def run_demo(self, objective: str) -> dict[str, Any]:
+    def run_demo(self, objective: str,
+                 job_id: str | None = None) -> dict[str, Any]:
         cap = self.broker.issue(
             "crow-os/kernel",
             [{"method": "EXECUTE", "resource": "jobs.run"}],
             ttl_seconds=600, rate_limit=10)
-        job_id = self.workflow.create_job(objective)
+        if job_id is None:
+            job_id = self.workflow.create_job(objective)
+        else:
+            self.workflow.get(job_id)  # must already exist (pre-created)
 
         # debugger
         self.broker.authorize(cap, "EXECUTE", "jobs.run")

@@ -248,3 +248,22 @@ class Round11RegressionTests(unittest.TestCase):
                 client.chat("x")
         finally:
             srv.shutdown()
+
+
+class WiringRegressionTests(unittest.TestCase):
+    """v0.4 wiring: pre-created job ids flow through both run paths."""
+
+    def test_run_demo_with_precreated_job(self):
+        kernel = Kernel(Path(tempfile.mkdtemp()))
+        jid = kernel.workflow.create_job("wired")
+        job = kernel.run_demo("wired", job_id=jid)
+        self.assertEqual(job["status"], "completed")
+        created = [e for e in kernel.ledger.read()
+                   if e["kind"] == "job.created" and e["raw"]["job_id"] == jid]
+        self.assertEqual(len(created), 1)
+
+    def test_run_demo_bogus_job_id_rejected(self):
+        kernel = Kernel(Path(tempfile.mkdtemp()))
+        from crow_os.workflow import WorkflowError
+        with self.assertRaises(WorkflowError):
+            kernel.run_demo("x", job_id="nope")

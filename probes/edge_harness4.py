@@ -8,7 +8,20 @@ from crow_os.workflow import Workflow, WorkflowError
 from crow_os.ledger import Ledger
 
 SECRET = b"probe-secret-probe-secret-32byte"
-B = "http://127.0.0.1:8792"
+import os
+B = os.environ.get("CROW_PROBE_BASE")
+_own_server = None
+if not B:
+    # Self-booting: spin up our own Home Screen server + kernel home.
+    import threading as _th
+    from http.server import ThreadingHTTPServer as _THS
+    from crow_os.runtime import Kernel as _K
+    from crow_os.server import HomeServer as _HS, make_handler as _mh
+    import tempfile as _tf
+    _httpd = _THS(("127.0.0.1", 0), _mh(_HS(_K(Path(_tf.mkdtemp())))))
+    _th.Thread(target=_httpd.serve_forever, daemon=True).start()
+    B = f"http://127.0.0.1:{_httpd.server_address[1]}"
+    _own_server = _httpd
 results = []
 def probe(name, fn):
     try: ok, note = fn()
@@ -47,9 +60,12 @@ def p4():
     return code == 404, f"POST unknown path -> {code}"
 
 def p5():
+    _, dall = req("GET", "/api/ledger?limit=500")
     c0, d0 = req("GET", "/api/ledger?limit=0")
     c9, d9 = req("GET", "/api/ledger?limit=99999")
-    return len(d0["entries"]) == 1 and len(d9["entries"]) >= 5, f"limit=0 -> {len(d0['entries'])} entry (clamped), limit=99999 -> {len(d9['entries'])}"
+    total = len(dall["entries"])
+    return len(d0["entries"]) == min(1, total) and len(d9["entries"]) == total, \
+        f"limit=0 -> {len(d0['entries'])} (clamped to 1), limit=99999 -> {len(d9['entries'])} of {total} total"
 
 def p6():
     code, _ = req("POST", "/api/run", {"objective": "   \n\t  "})
@@ -129,5 +145,7 @@ for name, fn in [("P2 llm mode fails closed via API", p2), ("P3 GET on POST rout
                  ("P10 depth-10 lineage revocation", p10), ("P11 external ledger truncation", p11),
                  ("P12 duplicate objectives distinct jobs", p12)]:
     probe(name, fn)
+if _own_server is not None:
+    _own_server.shutdown()
 fails = [n for n, ok in results if not ok]
 print(f"\n{len(results)-len(fails)}/{len(results)} round-4 probes passed; failures: {fails}")

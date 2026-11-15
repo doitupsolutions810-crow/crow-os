@@ -38,8 +38,12 @@ class LLMWorker:
         self.client = client
 
     def run(self, objective: str, cap: dict[str, Any],
-            outputs: dict | None = None) -> dict[str, Any]:
-        job_id = self.workflow.create_job(objective)
+            outputs: dict | None = None,
+            job_id: str | None = None) -> dict[str, Any]:
+        if job_id is None:
+            job_id = self.workflow.create_job(objective)
+        else:
+            self.workflow.get(job_id)  # must already exist (pre-created)
         role = "debugger"
         try:
             # debugger (LLM)

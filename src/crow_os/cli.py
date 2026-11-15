@@ -41,7 +41,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"cannot serve on port {a.port}: {e}")
             return 2
     if a.cmd == "verify":
-        verdict = Ledger(home / "ledger.jsonl").verify()
+        from .runtime import SECRET_FILE
+        secret_file = home / SECRET_FILE
+        if secret_file.exists():
+            from .signers import HmacSigner
+            verdict = Ledger(home / "ledger.jsonl",
+                             signer=HmacSigner(secret_file.read_bytes())).verify()
+            verdict["signed"] = True
+        else:
+            verdict = Ledger(home / "ledger.jsonl").verify()
+            verdict["signed"] = False
         print(json.dumps(verdict, indent=2))
         return 0 if verdict["ok"] else 1
     return 2

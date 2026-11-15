@@ -41,30 +41,25 @@ class HomeServer:
         }
 
     def start_run(self, objective: str, mode: str) -> dict[str, Any]:
-        # Create the job synchronously so the caller gets a job_id at
-        # once; the chain itself runs in a thread. Job creation is a
-        # ledger append, so the run is visible (and auditable) even if
-        # the server dies mid-flight.
-        if mode == "llm":
-            target = lambda: self.kernel.run_llm(objective)  # noqa: E731
-            # run_llm creates its own job; pre-create is not possible, so
-            # for llm mode the thread reports back through the ledger.
-            t = threading.Thread(target=target, daemon=True)
-            t.start()
-            self._threads.append(t)
-            return {"started": True, "mode": "llm", "note": "job id appears in /api/jobs"}
+        # One wiring path for both modes: the job is created up front
+        # (so the caller always gets its id immediately and the run is
+        # in the ledger even if the server dies), then the KERNEL's own
+        # chain implementation executes it in a thread. There is no
+        # second copy of the chain logic here to drift out of sync.
         job_id = self.kernel.workflow.create_job(objective)
-        t = threading.Thread(target=self._run_demo_steps, args=(job_id, objective),
-                             daemon=True)
+        if mode == "llm":
+            target = lambda: self.kernel.run_llm(objective, job_id=job_id)  # noqa: E731
+        else:
+            target = lambda: self.kernel.run_demo(objective, job_id=job_id)  # noqa: E731
+        t = threading.Thread(target=self._guarded, args=(job_id, target), daemon=True)
         t.start()
         self._threads.append(t)
-        return {"started": True, "mode": "demo", "job": self.kernel.workflow.get(job_id)}
+        return {"started": True, "mode": mode,
+                "job": self.kernel.workflow.get(job_id)}
 
-    def _run_demo_steps(self, job_id: str, objective: str) -> None:
-        # The demo chain, paced by the ledger itself: identical steps and
-        # checks to Kernel.run_demo, but the job already exists.
+    def _guarded(self, job_id: str, target) -> None:
         try:
-            self._demo_chain(job_id, objective)
+            target()
         except Exception as e:  # a dead thread must not strand the job
             try:
                 job = self.kernel.workflow.get(job_id)
@@ -74,32 +69,6 @@ class HomeServer:
                         job_id, role, False, f"{type(e).__name__}: {e}")
             except Exception:
                 pass
-
-    def _demo_chain(self, job_id: str, objective: str) -> None:
-        k = self.kernel
-        cap = k.broker.issue("crow-os/kernel",
-                             [{"method": "EXECUTE", "resource": "jobs.run"}],
-                             ttl_seconds=600, rate_limit=10)
-        k.broker.authorize(cap, "EXECUTE", "jobs.run")
-        plan = {"job": job_id, "objective": objective,
-                "criteria": ["artifact references plan", "artifact non-empty"]}
-        state = k.workflow.report(job_id, "debugger", True, f"plan:{job_id}")
-        if state["status"] == "failed":
-            return
-        artifact = f"# artifact for {objective}\nplan:{job_id}\n"
-        ok = f"plan:{job_id}" in artifact and len(artifact) > 0
-        state = k.workflow.report(job_id, "coder", ok, "artifact written")
-        if state["status"] == "failed":
-            return
-        k.outputs[job_id] = {"plan": json.dumps(plan, indent=2), "artifact": artifact}
-        results = [f"plan:{job_id}" in artifact, len(artifact) > 0]
-        state = k.workflow.report(job_id, "tester", all(results),
-                                  f"criteria {sum(results)}/{len(results)}")
-        if state["status"] == "failed":
-            return
-        verdict = k.ledger.verify()
-        k.workflow.report(job_id, "governance", verdict["ok"],
-                          f"ledger ok={verdict['ok']} entries={verdict['entries']}")
 
     def job_detail(self, job_id: str) -> dict[str, Any] | None:
         try:

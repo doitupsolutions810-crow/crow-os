@@ -24,11 +24,21 @@ audit failure it prevents.
 - Persistent broker state is signed and written atomically under a
   lock (concurrent runs cannot race it).
 
-## v0.4 — fleet
+## v0.4 — wiring & stability (shipped)
+
+- One chain implementation: the server pre-creates the job and the
+  kernel executes it — demo and LLM paths both accept a pre-created
+  job_id, so the run API is uniform and no step logic is duplicated.
+- `crow verify` now checks entry signatures when the home has a
+  secret (previously it verified digests only).
+- `scripts/check.sh` runs the unit suite plus every probe harness;
+  CI runs it too.
+
+## v0.5 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
-## v0.5 — federation
+## v0.6 — federation
 - mTLS peer links (living-intermediate's verified design), digest-checked
   ingest — no unauthenticated peers
 
