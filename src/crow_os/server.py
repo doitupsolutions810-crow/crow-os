@@ -21,6 +21,7 @@ from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
+MAX_BODY_BYTES = 65_536
 
 
 class HomeServer:
@@ -116,6 +117,23 @@ class HomeServer:
 
 def make_handler(home: HomeServer):
     class Handler(BaseHTTPRequestHandler):
+        def _payload(self) -> dict[str, Any]:
+            """Bound JSON POST intake before reading; no list/null payloads."""
+            raw_length = self.headers.get("Content-Length")
+            try:
+                length = int(raw_length) if raw_length is not None else 0
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid Content-Length") from exc
+            if not 0 < length <= MAX_BODY_BYTES:
+                raise ValueError("JSON body must be between 1 and 65536 bytes")
+            try:
+                value = json.loads(self.rfile.read(length))
+            except (ValueError, UnicodeError) as exc:
+                raise ValueError("body must be JSON") from exc
+            if not isinstance(value, dict):
+                raise ValueError("body must be a JSON object")
+            return value
+
         def _json(self, code: int, obj: Any) -> None:
             body = json.dumps(obj).encode()
             self.send_response(code)
@@ -214,8 +232,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/agents":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     agent = home.kernel.agents.create(
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
@@ -229,8 +246,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/plugins":
                 from .plugins import PluginError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     home.kernel.plugins.set_asserted(
                         payload.get("id"), bool(payload.get("connected")))
                 except (ValueError, json.JSONDecodeError):
@@ -241,8 +257,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/devices":
                 from .devices import DeviceError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     device = home.kernel.devices.register(
                         payload.get("name"), payload.get("kind", "device"),
                         payload.get("address", ""))
@@ -254,8 +269,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/spawn":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     agent_id = payload.get("agent")
                     objective = payload.get("objective")
                     parent = payload.get("parent")
@@ -281,8 +295,7 @@ def make_handler(home: HomeServer):
             if u.path != "/api/run":
                 return self._json(404, {"error": "not found"})
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._payload()
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "body must be JSON"})
             objective = payload.get("objective")
