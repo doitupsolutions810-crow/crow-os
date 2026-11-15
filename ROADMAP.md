@@ -188,12 +188,26 @@ The three near-term evolutions, wired:
   parent completes only if ALL members complete; merged output on
   the parent job. POST /api/fleet.
 
-Still hypothetical, by design: multi-device federation (mTLS
-between Crow homes, Ed25519 identity per home — the signer is
-already in the tree) and live third-party connectors behind the
-Connect-apps catalog (today: verified-local or user-asserted only).
+## v0.15 — federation (shipped)
 
-## v0.15 — federation
+Not hypothetical anymore. Each home has an Ed25519 identity
+(identity.ed25519 in the home dir, mode 0600; GET /api/identity).
+Homes register peers (name + URL + public key, /system/peers.json;
+GET/POST/DELETE /api/peers). Dispatch is a signed request — the
+receiver verifies against the REGISTERED public key, refuses
+unsigned / forged / stale (>120s, anti-replay) / unknown-peer
+requests with 401, validates the agent BEFORE attesting
+federation.received, and runs the job under its own governance.
+The sender attests federation.dispatched with the remote job id;
+the reply carries the remote transcript. POST
+/api/federation/dispatch + /api/federation/run. Transport is HTTP
+carrying the signature — mTLS can wrap the same endpoints later
+without changing the trust model. Round-18 probes cover the full
+refusal matrix.
+
+Remaining designed-but-unwired item: live third-party connectors
+behind the Connect-apps catalog (today: verified-local or
+user-asserted only, and labeled as such wherever shown).
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 

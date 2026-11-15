@@ -119,11 +119,11 @@ class HomeServer:
 def make_handler(home: HomeServer):
     class Handler(BaseHTTPRequestHandler):
         def _payload(self) -> dict[str, Any]:
-            """Bound all JSON POST routes, including routines and fleet."""
+            """Bound JSON POST bodies for agent, fleet, peer and routine routes."""
             raw = self.headers.get("Content-Length")
             try:
                 length = int(raw) if raw is not None else 0
-            except (TypeError, ValueError) as exc:
+            except (ValueError, TypeError) as exc:
                 raise ValueError("invalid Content-Length") from exc
             if not 0 < length <= MAX_BODY_BYTES:
                 raise ValueError("JSON body must be 1..65536 bytes")
@@ -178,6 +178,10 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/identity":
+                self._json(200, home.kernel.identity_info())
+            elif u.path == "/api/peers":
+                self._json(200, {"peers": home.kernel.peers.list()})
             elif u.path == "/api/routines":
                 self._json(200, {"routines": home.kernel.routines.list()})
             elif u.path.startswith("/api/agents/") and u.path.endswith("/memory"):
@@ -248,6 +252,13 @@ def make_handler(home: HomeServer):
                     return self._json(200, {"deleted": True})
                 except RoutineError as e:
                     return self._json(404, {"error": str(e)})
+            if u.path.startswith("/api/peers/"):
+                from .federation import FederationError
+                try:
+                    home.kernel.peers.remove(u.path.rsplit("/", 1)[-1])
+                    return self._json(200, {"deleted": True})
+                except FederationError as e:
+                    return self._json(404, {"error": str(e)})
             if u.path.startswith("/api/agents/"):
                 from .agents import AgentError
                 try:
@@ -267,7 +278,8 @@ def make_handler(home: HomeServer):
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
                         tools=payload.get("tools"),
-                        avatar=payload.get("avatar"))
+                        avatar=payload.get("avatar"),
+                        extra_tools=home.kernel.connectors.tool_names())
                 except (ValueError, json.JSONDecodeError):
                     return self._json(400, {"error": "body must be JSON"})
                 except AgentError as e:
@@ -319,6 +331,45 @@ def make_handler(home: HomeServer):
                 except AgentError as e:
                     return self._json(400, {"error": str(e)})
                 return self._json(202, {"started": True, "job_id": parent_id})
+            if u.path == "/api/peers":
+                from .federation import FederationError
+                try:
+                    payload = self._payload()
+                    peer = home.kernel.peers.register(
+                        payload.get("name"), payload.get("url"),
+                        payload.get("pubkey"))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except FederationError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(201, {"peer": peer})
+            if u.path == "/api/federation/dispatch":
+                from .federation import FederationError
+                try:
+                    payload = self._payload()
+                    reply = home.kernel.federation_dispatch(
+                        payload.get("peer"), payload.get("agent"),
+                        payload.get("objective"))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except FederationError as e:
+                    return self._json(502, {"error": str(e)})
+                return self._json(200, reply)
+            if u.path == "/api/federation/run":
+                from .federation import FederationError, verify_incoming
+                from .agents import AgentError
+                try:
+                    payload = self._payload()
+                    peer = verify_incoming(home.kernel.peers, payload)
+                    result = home.kernel.federation_receive(
+                        peer["name"], payload["agent"], payload["objective"])
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except AgentError as e:
+                    return self._json(400, {"error": str(e)})
+                except FederationError as e:
+                    return self._json(401, {"error": str(e)})
+                return self._json(200, result)
             if u.path == "/api/plugins":
                 from .plugins import PluginError
                 try:
