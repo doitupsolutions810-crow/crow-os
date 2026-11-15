@@ -81,13 +81,12 @@ class CrowChat:
         return answer
 
 
-def start_mission(client: CrowChat, *, network: bool = False,
-                  model: str | None = None,
-                  on_submit: Callable[[dict], None] | None = None) -> list[dict]:
+def ensure_agents(client: CrowChat, network: bool = False) -> list[dict]:
+    """Create or reuse the four named role-instructed agents without running jobs."""
     listing = client.request("GET", "/api/agents").get("agents")
     if not isinstance(listing, list):
         raise MissionError("Crow OS agents listing malformed")
-    jobs = []
+    selected = []
     for name, instructions in AGENTS:
         grants = ["net.fetch", "net.resolve"] if network else []
         compatible = next((item for item in listing
@@ -112,6 +111,17 @@ def start_mission(client: CrowChat, *, network: bool = False,
             if not isinstance(compatible, dict) or not isinstance(compatible.get("id"), str):
                 raise MissionError("agent creation was not acknowledged")
             listing.append(compatible)
+        selected.append(compatible)
+    return selected
+
+
+def start_mission(client: CrowChat, *, network: bool = False,
+                  model: str | None = None,
+                  on_submit: Callable[[dict], None] | None = None) -> list[dict]:
+    """Send the exact directive to each governed agent individually."""
+    jobs = []
+    grants = ["net.fetch", "net.resolve"] if network else []
+    for compatible in ensure_agents(client, network):
         # The quoted instruction remains the first line. Public-source
         # scope enables the current worker's explicit URL-triggered fetch.
         objective = PROMPT + (f"\nInspect public source only: {SOURCE_URL}" if network else "")
@@ -129,6 +139,23 @@ def start_mission(client: CrowChat, *, network: bool = False,
         if on_submit is not None:
             on_submit(job)
     return jobs
+
+def start_fleet_mission(client: CrowChat, *, network: bool = False,
+                        on_submit: Callable[[dict], None] | None = None) -> list[dict]:
+    """Use Crow OS native parallel fleet (each child is capability-governed)."""
+    agents = ensure_agents(client, network)
+    objective = PROMPT + (f"\nInspect public source only: {SOURCE_URL}" if network else "")
+    result = client.request("POST", "/api/fleet", {
+        "objective": objective, "agents": [a["id"] for a in agents]})
+    job_id = result.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise MissionError("Crow OS did not confirm the fleet parent job")
+    job = {"agent": "Crow OS Fleet", "agent_ids": [a["id"] for a in agents],
+           "job_id": job_id, "status": "running", "objective": objective,
+           "tools": ["net.fetch", "net.resolve"] if network else []}
+    if on_submit is not None:
+        on_submit(job)
+    return [job]
 
 
 def watch_mission(client: CrowChat, jobs: list[dict], *, deadline: float = 120,
@@ -167,6 +194,10 @@ def watch_mission(client: CrowChat, jobs: list[dict], *, deadline: float = 120,
                 output = detail.get("outputs")
                 if isinstance(output, dict) and isinstance(output.get("artifact"), str):
                     job["output_excerpt"] = output["artifact"][-800:]
+                if isinstance(output, dict) and isinstance(output.get("fleet"), list):
+                    job["fleet_members"] = [
+                        {k: member[k] for k in ("agent", "job_id", "status") if k in member}
+                        for member in output["fleet"][:8] if isinstance(member, dict)]
             if on_update is not None:
                 on_update(job)
         if remaining:
@@ -221,11 +252,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--rounds", type=int, default=1,
                         help="Bounded sequential agent mission rounds (1..5)")
+    parser.add_argument("--fleet", action="store_true",
+                        help="Submit the four agents through native parallel /api/fleet")
     args = parser.parse_args(argv)
     if not 1 <= args.deadline <= 3600:
         parser.error("--deadline must be between 1 and 3600 seconds")
     if not 1 <= args.rounds <= 5:
         parser.error("--rounds must be between 1 and 5")
+    if args.fleet and args.model:
+        parser.error("Crow OS fleet API does not accept --model; configure agents instead")
     if args.dry_run:
         print(json.dumps({"prompt": PROMPT,
             "agents": [{"name": n, "instructions": i,
@@ -234,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     evidence = {"prompt": PROMPT, "base_url": args.base_url,
                 "network_grants": args.enable_network,
-                "rounds_requested": args.rounds, "rounds_finished": 0,
+                "rounds_requested": args.rounds, "fleet_mode": args.fleet,
+                "rounds_finished": 0,
                 "jobs": [], "all_complete": False, "error": None}
     try:
         save_evidence(args.evidence, evidence)
@@ -251,8 +287,12 @@ def main(argv: list[str] | None = None) -> int:
                 if job not in evidence["jobs"]:
                     evidence["jobs"].append(job)
                 save_evidence(args.evidence, evidence)
-            jobs = start_mission(client, network=args.enable_network,
-                                 model=args.model, on_submit=checkpoint)
+            if args.fleet:
+                jobs = start_fleet_mission(client, network=args.enable_network,
+                                           on_submit=checkpoint)
+            else:
+                jobs = start_mission(client, network=args.enable_network,
+                                     model=args.model, on_submit=checkpoint)
             for job in jobs:
                 job["round"] = round_no
             save_evidence(args.evidence, evidence)
