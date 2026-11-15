@@ -88,6 +88,13 @@ class AgentRegistryHardeningTests(unittest.TestCase):
             "created": float("nan"), "tools": []}))
         self.assertEqual(self.agents.list(), [agent])
 
+    def test_huge_hand_edited_creation_timestamp_does_not_crash_listing(self):
+        # JSON permits very large integers, but math.isfinite(10**900) overflows.
+        self.fs.write_file("/system/agents/huge.json", json.dumps({
+            "id": "huge", "name": "Huge", "instructions": "bad",
+            "created": 10 ** 900, "tools": []}))
+        self.assertEqual(self.agents.list(), [])
+
     def test_concurrent_threads_use_distinct_ids(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
             names = list(pool.map(lambda _: self.agents.create("Parallel", "A")["id"],
