@@ -10,12 +10,15 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Callable
 
 PROMPT = "Continue Even Longer more robust Test against even more Edge cases and Fix Along the way"
 SOURCE_URL = "https://github.com/doitupsolutions810-crow/crow-os"
@@ -79,7 +82,8 @@ class CrowChat:
 
 
 def start_mission(client: CrowChat, *, network: bool = False,
-                  model: str | None = None) -> list[dict]:
+                  model: str | None = None,
+                  on_submit: Callable[[dict], None] | None = None) -> list[dict]:
     listing = client.request("GET", "/api/agents").get("agents")
     if not isinstance(listing, list):
         raise MissionError("Crow OS agents listing malformed")
@@ -118,14 +122,18 @@ def start_mission(client: CrowChat, *, network: bool = False,
         started = client.request("POST", "/api/run", request).get("job")
         if not isinstance(started, dict) or not isinstance(started.get("job_id"), str):
             raise MissionError("Crow OS did not return a job ID")
-        jobs.append({"agent": compatible["name"], "agent_id": compatible["id"],
-                     "job_id": started["job_id"], "status": started.get("status", "running"),
-                     "tools": grants, "objective": objective})
+        job = {"agent": compatible["name"], "agent_id": compatible["id"],
+               "job_id": started["job_id"], "status": started.get("status", "running"),
+               "tools": grants, "objective": objective}
+        jobs.append(job)
+        if on_submit is not None:
+            on_submit(job)
     return jobs
 
 
 def watch_mission(client: CrowChat, jobs: list[dict], *, deadline: float = 120,
-                  interval: float = 0.5) -> list[dict]:
+                  interval: float = 0.5,
+                  on_update: Callable[[dict], None] | None = None) -> list[dict]:
     started = time.monotonic()
     remaining = {job["job_id"] for job in jobs}
     while remaining and time.monotonic() - started < deadline:
@@ -144,12 +152,47 @@ def watch_mission(client: CrowChat, jobs: list[dict], *, deadline: float = 120,
                 output = detail.get("outputs")
                 if isinstance(output, dict) and isinstance(output.get("artifact"), str):
                     job["output_excerpt"] = output["artifact"][-800:]
+            if on_update is not None:
+                on_update(job)
         if remaining:
             time.sleep(interval)
     for job in jobs:
         if job["job_id"] in remaining:
             job["status"], job["terminal"] = "unverified-timeout", False
+            if on_update is not None:
+                on_update(job)
     return jobs
+
+
+def save_evidence(path: Path, evidence: dict) -> None:
+    """Atomic private checkpoints, including jobs submitted before later failures."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = (json.dumps(evidence, indent=2, ensure_ascii=True) + "\n").encode("utf-8")
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", prefix=".crow-mission-",
+                                         suffix=".tmp", dir=path.parent,
+                                         delete=False) as stream:
+            tmp = Path(stream.name)
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp is not None and tmp.exists():
+            tmp.unlink()
+
+
+def check_runtime(client: CrowChat) -> dict:
+    status = client.request("GET", "/api/status")
+    info = status.get("ollama")
+    if not isinstance(info, dict) or info.get("reachable") is not True:
+        raise MissionError("Crow OS local Ollama is not reachable; no jobs submitted")
+    ledger = status.get("ledger")
+    if not isinstance(ledger, dict) or ledger.get("ok") is not True:
+        raise MissionError("Crow OS ledger is not verified; no jobs submitted")
+    return {"ollama_reachable": True, "ledger_verified": True}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -161,29 +204,63 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deadline", type=float, default=120)
     parser.add_argument("--evidence", type=Path, default=Path("crow-os-edge-mission.json"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--rounds", type=int, default=1,
+                        help="Bounded sequential agent mission rounds (1..5)")
     args = parser.parse_args(argv)
     if not 1 <= args.deadline <= 3600:
         parser.error("--deadline must be between 1 and 3600 seconds")
+    if not 1 <= args.rounds <= 5:
+        parser.error("--rounds must be between 1 and 5")
     if args.dry_run:
         print(json.dumps({"prompt": PROMPT,
             "agents": [{"name": n, "instructions": i,
                         "tools": ["net.fetch", "net.resolve"] if args.enable_network else []}
                        for n, i in AGENTS]}, indent=2))
         return 0
+    evidence = {"prompt": PROMPT, "base_url": args.base_url,
+                "network_grants": args.enable_network,
+                "rounds_requested": args.rounds, "rounds_finished": 0,
+                "jobs": [], "all_complete": False, "error": None}
     try:
+        save_evidence(args.evidence, evidence)
         client = CrowChat(args.base_url)
-        jobs = start_mission(client, network=args.enable_network, model=args.model)
-        print(json.dumps({"submitted": len(jobs),
-            "jobs": [{k: j[k] for k in ("agent", "job_id", "tools")} for j in jobs]}, indent=2), flush=True)
-        watch_mission(client, jobs, deadline=args.deadline)
-        evidence = {"prompt": PROMPT, "base_url": client.base,
-                    "network_grants": args.enable_network, "jobs": jobs,
-                    "all_complete": all(j["status"] == "completed" for j in jobs)}
-        args.evidence.parent.mkdir(parents=True, exist_ok=True)
-        args.evidence.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+        evidence["preflight"] = check_runtime(client)
+        save_evidence(args.evidence, evidence)
+        began = time.monotonic()
+        for round_no in range(1, args.rounds + 1):
+            remaining = args.deadline - (time.monotonic() - began)
+            if remaining <= 0:
+                evidence["error"] = "mission deadline exhausted"
+                break
+            def checkpoint(job: dict) -> None:
+                if job not in evidence["jobs"]:
+                    evidence["jobs"].append(job)
+                save_evidence(args.evidence, evidence)
+            jobs = start_mission(client, network=args.enable_network,
+                                 model=args.model, on_submit=checkpoint)
+            for job in jobs:
+                job["round"] = round_no
+            save_evidence(args.evidence, evidence)
+            print(json.dumps({"round": round_no, "submitted": len(jobs),
+                "jobs": [{k: j[k] for k in ("agent", "job_id", "tools")} for j in jobs]}), flush=True)
+            watch_mission(client, jobs, deadline=max(0, remaining),
+                          on_update=checkpoint)
+            evidence["rounds_finished"] = round_no
+            save_evidence(args.evidence, evidence)
+            if not all(job["status"] == "completed" for job in jobs):
+                evidence["error"] = "one or more jobs failed or did not finish"
+                break
+        evidence["all_complete"] = (evidence["rounds_finished"] == args.rounds and
+            all(j["status"] == "completed" for j in evidence["jobs"]))
+        save_evidence(args.evidence, evidence)
         print(json.dumps(evidence, indent=2))
         return 0 if evidence["all_complete"] else 1
-    except MissionError as exc:
+    except (MissionError, OSError, ValueError) as exc:
+        evidence["error"] = str(exc)
+        try:
+            save_evidence(args.evidence, evidence)
+        except OSError:
+            pass
         print(f"Crow OS mission failed: {exc}", file=sys.stderr)
         return 2
 
