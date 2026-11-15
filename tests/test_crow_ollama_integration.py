@@ -4,7 +4,9 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import multiprocessing
 import sys
+from concurrent.futures import ProcessPoolExecutor
 import tempfile
 import threading
 import unittest
@@ -62,6 +64,13 @@ def stub_ollama(*, partial=False):
         thread.join(timeout=3)
 
 
+def _multiprocess_avrone_import(args):
+    """Each worker constructs its own signed-ledger kernel and imports the same post."""
+    home, journal = args
+    from crow_os.avrone import import_avrone_journal
+    return import_avrone_journal(Kernel(Path(home)), Path(journal))
+
+
 class CrowLocalIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.t = tempfile.TemporaryDirectory()
@@ -113,6 +122,22 @@ class CrowLocalIntegrationTests(unittest.TestCase):
         items = [row for row in kernel.ledger.read() if row["kind"] == "avrone.observation"]
         self.assertEqual(len(items), 1)
         self.assertTrue(items[0]["raw"]["untrusted"])
+
+    def test_parallel_process_import_keeps_single_signed_observation(self):
+        from crow_os.avrone import import_avrone_journal
+        source = Path(self.t.name) / "shared.jsonl"
+        source.write_text(json.dumps({"id": "shared", "run_id": "fleet",
+            "kind": "finding", "text": "one durable event", "refs": []}) + "\n")
+        Kernel(self.home)  # initialize shared key and ledger before spawning
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=2, mp_context=ctx) as pool:
+            results = list(pool.map(_multiprocess_avrone_import,
+                                    [(str(self.home), str(source))] * 2))
+        self.assertEqual(sorted(x["accepted"] for x in results), [0, 1])
+        verifier = Kernel(self.home)
+        self.assertTrue(verifier.ledger.verify()["ok"])
+        self.assertEqual(len([r for r in verifier.ledger.read()
+                              if r["kind"] == "avrone.observation"]), 1)
 
 
 if __name__ == "__main__":
