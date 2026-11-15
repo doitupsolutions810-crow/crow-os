@@ -121,6 +121,8 @@ class AgentRegistry:
             if not isinstance(model, str):
                 raise AgentError("model must be a string")
             model = _clean_text(model, "model", 200) if model.strip() else None
+            if model is not None and any(ch.isspace() for ch in model):
+                raise AgentError("model name cannot contain whitespace")
         if tools is None:
             tools = []
         if not isinstance(tools, (list, tuple)):
@@ -168,11 +170,18 @@ class AgentRegistry:
                 not isinstance(agent.get("name"), str) or
                 not isinstance(agent.get("instructions"), str)):
             raise AgentError(f"corrupt agent definition: {agent_id}")
+        # Legacy Crow OS agents created before the avatar schema sometimes
+        # lack these optional fields; retain them with least-privilege defaults.
+        agent.setdefault("created", 0.0)
+        agent.setdefault("tools", [])
         if (not isinstance(agent.get("created"), (int, float)) or
                 isinstance(agent.get("created"), bool) or
                 not math.isfinite(agent["created"]) or
                 not isinstance(agent.get("tools"), list) or
-                any(not isinstance(t, str) or t not in TOOLS for t in agent["tools"])):
+                any(not isinstance(t, str) or t not in TOOLS for t in agent["tools"]) or
+                (agent.get("model") is not None and
+                 (not isinstance(agent["model"], str) or
+                  any(ch.isspace() for ch in agent["model"])))):
             raise AgentError(f"corrupt agent definition: {agent_id}")
         agent.setdefault("avatar", dict(DEFAULT_AVATAR))
         return agent
