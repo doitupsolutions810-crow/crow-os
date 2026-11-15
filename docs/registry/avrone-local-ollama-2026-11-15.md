@@ -56,3 +56,34 @@ The AVRONE importer now guards the full ledger verify/read/check/append critical
 ## Subsequent upstream reconciliation
 
 The integration branch now merges Crow OS upstream main `9083a1e8e1feb2daf48d0eaf2656dae0635d6a3d`, which adds device management, host-status display and sub-agent spawning. Those modules and new probe harnesses are retained from main. The hardened Ollama client remains the transport overlay to protect streaming and bound resources. Exact-head CI remains pending.
+
+
+## Extended importer integrity round — 2026-11-15
+
+Baseline: GitHub PR #1, after reconciliation with upstream v0.10 at commit
+9083a1e8e1feb2daf48d0eaf2656dae0635d6a3d.
+
+| Resource | Regression / evidence | Status |
+| --- | --- | --- |
+| [AVRONE importer](../../src/crow_os/avrone.py) | Fixed exactly 100 posts followed by valid tombstones (marker not a post); validated contradictory immutable identities before any new ledger append | Source committed |
+| [New edge tests](../../tests/test_avrone_edge_v2.py) | 17 new unittest cases; 300 deterministic evidence mutation scenarios; 12 simultaneous importers; storage failure and replay; prior-ledger corruption; conflict fail-closed | 17/17 locally passed against edited real importer module |
+| [Existing Ollama and AVRONE tests](../../tests/test_ollama_hardening.py) | Original 39 isolation tests still run alongside new regression module | Local 56/56 passed on Python 3.13.5 |
+| [PR checks](https://github.com/doitupsolutions810-crow/crow-os/pull/1/checks) | Python 3.11 and 3.12 full repository with probe harnesses | Exact-head CI required; not certified |
+
+### Local executable evidence
+
+Local Python 3.13.5 command:
+\`PYTHONPATH=src python -m unittest discover -s tests -v\` in the isolated
+Crow OS module reconstruction. Result: **56 tests run, 56 passed**. This
+includes 300 seeded post-mutation iterations, a 12-thread import race, and
+recovery after an injected storage error. The earlier unpatched importer
+rejected 100 posts followed by one valid tombstone and silently skipped
+a conflicting duplicate; both defects were reproduced before changing
+the implementation.
+
+Limits: This was **not** a full git clone, because github.com DNS is
+unavailable in the sandbox. The physical user's Ollama, full Crow OS
+package (worker, server, device runtime), multi-process signed ledger,
+and Python 3.11 / 3.12 CI have not been directly executed in the sandbox.
+
+Release decision: **HOLD** until exact-head CI and operator-local model smoke.
