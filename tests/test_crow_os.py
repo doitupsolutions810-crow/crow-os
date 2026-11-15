@@ -115,3 +115,9 @@ class KernelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_blank_objective_rejected(self):
+        with self.assertRaises(WorkflowError):
+            self.wf.create_job("   ")
+        with self.assertRaises(WorkflowError):
+            self.wf.create_job("")

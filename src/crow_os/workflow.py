@@ -50,6 +50,10 @@ class Workflow:
         return list(self._jobs().values())
 
     def create_job(self, objective: str) -> str:
+        # The blank-objective invariant lives here, not just in the HTTP
+        # layer: every caller (CLI, server, worker) gets it (probe P9).
+        if not isinstance(objective, str) or not objective.strip():
+            raise WorkflowError("objective must be a non-empty string")
         job_id = uuid.uuid4().hex[:12]
         self.ledger.append("crow-os", "job.created",
                            {"job_id": job_id, "objective": objective, "chain": CHAIN})
