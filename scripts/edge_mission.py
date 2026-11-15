@@ -11,6 +11,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -33,6 +34,15 @@ LIMIT = 2 * 1024 * 1024
 
 class MissionError(RuntimeError):
     pass
+
+
+_SAFE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z", re.ASCII)
+
+
+def _safe_id(value: str, kind: str) -> str:
+    if not isinstance(value, str) or not _SAFE_ID.fullmatch(value):
+        raise MissionError(f"Crow OS returned unsafe {kind} identifier")
+    return value
 
 
 def _base(base: str) -> str:
@@ -87,6 +97,7 @@ def ensure_agents(client: CrowChat, network: bool = False) -> list[dict]:
     if not isinstance(listing, list):
         raise MissionError("Crow OS agents listing malformed")
     selected = []
+    identities = set()
     for name, instructions in AGENTS:
         grants = ["net.fetch", "net.resolve"] if network else []
         compatible = next((item for item in listing
@@ -111,6 +122,10 @@ def ensure_agents(client: CrowChat, network: bool = False) -> list[dict]:
             if not isinstance(compatible, dict) or not isinstance(compatible.get("id"), str):
                 raise MissionError("agent creation was not acknowledged")
             listing.append(compatible)
+        key = _safe_id(compatible["id"], "agent")
+        if key in identities:
+            raise MissionError("Crow OS returned a repeated agent ID")
+        identities.add(key)
         selected.append(compatible)
     return selected
 
@@ -135,6 +150,7 @@ def start_mission(client: CrowChat, *, network: bool = False,
         job = {"agent": compatible["name"], "agent_id": compatible["id"],
                "job_id": started["job_id"], "status": started.get("status", "running"),
                "tools": grants, "objective": objective}
+        _safe_id(job["job_id"], "job")
         jobs.append(job)
         if on_submit is not None:
             on_submit(job)
@@ -148,8 +164,9 @@ def start_fleet_mission(client: CrowChat, *, network: bool = False,
     result = client.request("POST", "/api/fleet", {
         "objective": objective, "agents": [a["id"] for a in agents]})
     job_id = result.get("job_id")
-    if not isinstance(job_id, str) or not job_id:
+    if result.get("started") is not True or not isinstance(job_id, str) or not job_id:
         raise MissionError("Crow OS did not confirm the fleet parent job")
+    _safe_id(job_id, "fleet job")
     job = {"agent": "Crow OS Fleet", "agent_ids": [a["id"] for a in agents],
            "job_id": job_id, "status": "running", "objective": objective,
            "tools": ["net.fetch", "net.resolve"] if network else []}
@@ -172,6 +189,8 @@ def watch_mission(client: CrowChat, jobs: list[dict], *, deadline: float = 120,
             state = detail.get("job")
             if not isinstance(state, dict) or state.get("status") not in ("running", "failed", "completed"):
                 raise MissionError("Crow OS job state malformed")
+            if state.get("job_id") != job["job_id"]:
+                raise MissionError("Crow OS returned a mismatched job identity")
             job["status"] = state["status"]
             if isinstance(state.get("error"), str):
                 job["error"] = state["error"][:600]
