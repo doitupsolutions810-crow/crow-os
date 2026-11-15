@@ -31,9 +31,14 @@ class LedgerError(Exception):
 
 
 class Ledger:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, signer=None):
         self.path = Path(path)
         self._lock = threading.Lock()
+        # Optional entry signer. An unkeyed hash chain detects edits but
+        # not a full rewrite (probe M1): anyone can recompute digests.
+        # With a signer, every entry carries a signature over its body
+        # and verification fails closed on unsigned or forged entries.
+        self._signer = signer
 
     def append(self, source: str, kind: str, raw: dict[str, Any]) -> dict[str, Any]:
         # Read-modify-write must be atomic: without the lock, concurrent
@@ -54,6 +59,9 @@ class Ledger:
                     "digest": "",
                 }
                 entry["digest"] = _digest({k: v for k, v in entry.items() if k != "digest"})
+                if self._signer is not None:
+                    entry["sig"] = self._signer.sign(
+                        {k: v for k, v in entry.items() if k != "sig"})
                 f.write(_canon(entry) + "\n")
                 f.flush()
                 return entry
@@ -88,8 +96,15 @@ class Ledger:
                 errors.append(f"line {i}: seq {e.get('seq')!r} != expected {len(entries) - 1}")
             if e.get("prev_hash") != prev_digest:
                 errors.append(f"seq {e.get('seq')}: chain break")
-            body = {k: v for k, v in e.items() if k != "digest"}
+            body = {k: v for k, v in e.items() if k not in ("digest", "sig")}
             if _digest(body) != e.get("digest"):
                 errors.append(f"seq {e.get('seq')}: digest mismatch")
+            if self._signer is not None:
+                sig = e.get("sig")
+                if sig is None:
+                    errors.append(f"seq {e.get('seq')}: unsigned entry in signed ledger")
+                elif not self._signer.verify(
+                        {k: v for k, v in e.items() if k != "sig"}, sig):
+                    errors.append(f"seq {e.get('seq')}: bad entry signature")
             prev_digest = e.get("digest")
         return {"ok": not errors, "entries": len(entries), "errors": errors}

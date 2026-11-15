@@ -60,6 +60,6 @@ class OllamaClient:
             ],
         })
         content = (out.get("message") or {}).get("content", "")
-        if not content.strip():
-            raise LLMUnavailable("ollama returned an empty response")
+        if not isinstance(content, str) or not content.strip():
+            raise LLMUnavailable(f"ollama returned a non-text response: {type(content).__name__}")
         return content

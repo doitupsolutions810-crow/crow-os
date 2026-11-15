@@ -197,3 +197,54 @@ class Round10RegressionTests(unittest.TestCase):
             self.assertEqual(job["step"], 2)  # died at tester, governance never ran
         finally:
             srv.shutdown()
+
+
+class Round11RegressionTests(unittest.TestCase):
+    """Regressions for round-2 probes M1 / M2 / M4."""
+
+    def test_signed_ledger_rejects_full_rewrite(self):
+        import time
+        from crow_os.ledger import _canon, _digest
+        from crow_os.runtime import Kernel
+        kernel = Kernel(Path(tempfile.mkdtemp()))
+        kernel.run_demo("real")
+        fake = {"seq": 0, "ts": time.time(), "source": "attacker",
+                "kind": "job.created", "prev_hash": None,
+                "raw": {"job_id": "fake"}, "digest": ""}
+        fake["digest"] = _digest({k: v for k, v in fake.items() if k != "digest"})
+        kernel.ledger.path.write_text(_canon(fake) + "\n")
+        self.assertFalse(kernel.ledger.verify()["ok"])
+
+    def test_broker_state_tamper_fails_closed(self):
+        sp = Path(tempfile.mkdtemp()) / "state.json"
+        b = Broker(SECRET, state_path=sp)
+        cap = b.issue("a", [{"method": "GET", "resource": "/x"}], rate_limit=1)
+        b.authorize(cap, "GET", "/x")
+        saved = json.loads(sp.read_text())
+        saved["usage"] = {}
+        sp.write_text(json.dumps(saved))
+        with self.assertRaises(Exception):
+            Broker(SECRET, state_path=sp)
+
+    def test_ollama_null_content_fails_closed(self):
+        class NullStub(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                out = json.dumps({"message": {"content": None}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), NullStub)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            client = OllamaClient(base_url=f"http://127.0.0.1:{srv.server_address[1]}",
+                                  model="stub")
+            with self.assertRaises(Exception):
+                client.chat("x")
+        finally:
+            srv.shutdown()

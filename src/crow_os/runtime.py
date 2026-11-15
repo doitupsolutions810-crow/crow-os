@@ -15,6 +15,7 @@ from typing import Any
 
 from .capabilities import Broker
 from .ledger import Ledger
+from .signers import HmacSigner
 from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
 from .workflow import Workflow
 from .worker import LLMWorker
@@ -26,13 +27,13 @@ class Kernel:
     def __init__(self, home: Path):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
-        self.ledger = Ledger(self.home / "ledger.jsonl")
         secret_path = self.home / SECRET_FILE
         if not secret_path.exists():
             secret_path.write_bytes(hashlib.sha256(
                 f"crow-os:{self.home.resolve()}".encode()).digest())
-        self.broker = Broker(secret_path.read_bytes(),
-                             state_path=self.home / "broker_state.json")
+        secret = secret_path.read_bytes()
+        self.ledger = Ledger(self.home / "ledger.jsonl", signer=HmacSigner(secret))
+        self.broker = Broker(secret, state_path=self.home / "broker_state.json")
         self.workflow = Workflow(self.ledger)
 
     def run_llm(self, objective: str, model: str | None = None,

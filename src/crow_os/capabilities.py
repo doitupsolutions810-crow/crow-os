@@ -45,6 +45,12 @@ class Broker:
         self._state_path = Path(state_path) if state_path else None
         if self._state_path and self._state_path.exists():
             saved = json.loads(self._state_path.read_text())
+            sig = saved.pop("sig", None)
+            # The state file is a security input (it carries revocations
+            # and rate-limit usage), so it is signed like a capability:
+            # editing it is forgery, and forgery fails closed (probe M2).
+            if sig is None or not self._signer.verify(saved, sig):
+                raise CapabilityError("broker state signature invalid — refusing to load")
             self._revoked = set(saved.get("revoked", []))
             self._lineage = dict(saved.get("lineage", {}))
             self._usage = {k: int(v) for k, v in saved.get("usage", {}).items()}
@@ -54,12 +60,16 @@ class Broker:
         if not self._state_path:
             return
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(json.dumps({
+        state = {
             "revoked": sorted(self._revoked),
             "lineage": self._lineage,
             "usage": self._usage,
             "root_limits": self._root_limits,
-        }, sort_keys=True) + "\n")
+        }
+        state["sig"] = self._signer.sign(state)
+        tmp = self._state_path.with_suffix(self._state_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(state, sort_keys=True) + "\n")
+        tmp.replace(self._state_path)  # atomic: no torn state files
 
     def _sign(self, cap: dict[str, Any]) -> str:
         body = {k: v for k, v in cap.items() if k != "sig"}
