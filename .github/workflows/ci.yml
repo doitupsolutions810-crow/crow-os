@@ -1,0 +1,17 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix: { python: ["3.11", "3.12"] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - name: Kernel tests (includes ledger self-verification)
+        run: PYTHONPATH=src python -m unittest discover -s tests -v
+      - name: Demo run + ledger verify
+        run: |
+          PYTHONPATH=src python -c "import sys; sys.argv=['crow','--home','/tmp/crow-home','demo']; from crow_os.cli import main; main()"
+          PYTHONPATH=src python -c "import sys; sys.argv=['crow','--home','/tmp/crow-home','verify']; from crow_os.cli import main; main()"
