@@ -31,7 +31,7 @@ MAX_BYTES = 65_536
 EXCERPT_CHARS = 4_000
 TIMEOUT = 10.0
 
-TOOLS = ["net.fetch", "net.resolve"]
+TOOLS = ["net.fetch", "net.resolve", "fs.list", "fs.read", "fs.write"]
 
 
 class ToolError(Exception):
@@ -133,3 +133,40 @@ class ToolRunner:
         }
         self.calls.append(result)
         return result
+
+
+class FileTools:
+    """Capability-gated access to the OS file system (CrowFS).
+
+    Same discipline as the network tools: the broker authorizes
+    `TOOL fs.<op>` BEFORE any disk I/O, and every call is recorded
+    for the caller to attest in the ledger.
+    """
+
+    def __init__(self, broker: Broker, cap: dict[str, Any], fs):
+        self.broker = broker
+        self.cap = cap
+        self.fs = fs
+        self.calls: list[dict[str, Any]] = []
+
+    def list(self, vpath: str = "/") -> dict[str, Any]:
+        self.broker.authorize(self.cap, "TOOL", "fs.list")
+        result = {"tool": "fs.list", "path": vpath,
+                  "entries": self.fs.list_dir(vpath)}
+        self.calls.append({"tool": "fs.list", "path": vpath})
+        return result
+
+    def read(self, vpath: str) -> dict[str, Any]:
+        self.broker.authorize(self.cap, "TOOL", "fs.read")
+        content = self.fs.read_file(vpath)
+        self.calls.append({"tool": "fs.read", "path": vpath,
+                           "bytes": len(content.encode("utf-8"))})
+        return {"tool": "fs.read", "path": vpath, "content": content}
+
+    def write(self, vpath: str, content: str) -> dict[str, Any]:
+        self.broker.authorize(self.cap, "TOOL", "fs.write")
+        result = self.fs.write_file(vpath, content)
+        record = {"tool": "fs.write", "path": result["path"],
+                  "bytes": result["bytes"]}
+        self.calls.append(record)
+        return record

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .capabilities import Broker
+from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
 from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
@@ -42,10 +43,32 @@ class Kernel:
         self.broker = Broker(secret, state_path=self.home / "broker_state.json")
         self.workflow = Workflow(self.ledger)
         self.outputs: dict[str, dict[str, str]] = {}  # job_id -> plan/artifact (for the Home Screen code view)
+        self.fs = CrowFS(home)  # the OS file system (<home>/fs)
         # Operator's explicit choice: may agent tools reach non-public
         # addresses (intranet)? Default NO — the SSRF guard refuses
         # loopback/RFC1918/link-local/metadata destinations.
         self.allow_private_tools = allow_private_tools
+
+    def _persist_artifact(self, job_id: str) -> None:
+        """Save a completed job's artifact into the OS file system,
+        through the capability-gated fs tool, attested in the ledger."""
+        artifact = (self.outputs.get(job_id) or {}).get("artifact", "")
+        if not artifact:
+            return
+        from .tools import FileTools
+        cap = self.broker.issue(
+            "crow-os/kernel",
+            [{"method": "TOOL", "resource": "fs.write"}],
+            ttl_seconds=60, rate_limit=4)
+        tools = FileTools(self.broker, cap, self.fs)
+        try:
+            rec = tools.write(f"/home/user/Documents/{job_id}.md", artifact)
+        except Exception:
+            return  # best-effort; the job already completed
+        self.ledger.append("crow-os/tools", "tool.invoked", {
+            "job_id": job_id, "tool": rec["tool"], "path": rec["path"],
+            "bytes": rec["bytes"]})
+        self.outputs[job_id]["saved_to"] = rec["path"]
 
     def run_llm(self, objective: str, model: str | None = None,
                 base_url: str | None = None,
@@ -64,7 +87,10 @@ class Kernel:
         worker = LLMWorker(self.broker, self.workflow, self.ledger, client,
                            tools=ToolRunner(self.broker, cap,
                                             allow_private=self.allow_private_tools))
-        return worker.run(objective, cap, outputs=self.outputs, job_id=job_id)
+        job = worker.run(objective, cap, outputs=self.outputs, job_id=job_id)
+        if job["status"] == "completed":
+            self._persist_artifact(job["job_id"])
+        return job
 
     def run_demo(self, objective: str,
                  job_id: str | None = None) -> dict[str, Any]:
@@ -99,4 +125,7 @@ class Kernel:
         verdict = self.ledger.verify()
         self.workflow.report(job_id, "governance", verdict["ok"],
                              f"ledger ok={verdict['ok']} entries={verdict['entries']}")
-        return self.workflow.get(job_id)
+        job = self.workflow.get(job_id)
+        if job["status"] == "completed":
+            self._persist_artifact(job_id)
+        return job

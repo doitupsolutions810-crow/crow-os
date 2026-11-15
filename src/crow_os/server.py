@@ -131,6 +131,24 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/fs":
+                from .fs import FSError
+                q = parse_qs(u.query)
+                vp = (q.get("path") or ["/"])[0]
+                try:
+                    self._json(200, {"path": vp,
+                                     "entries": home.kernel.fs.list_dir(vp)})
+                except FSError as e:
+                    self._json(400, {"error": str(e)})
+            elif u.path == "/api/fs/read":
+                from .fs import FSError
+                q = parse_qs(u.query)
+                vp = (q.get("path") or [""])[0]
+                try:
+                    self._json(200, {"path": vp,
+                                     "content": home.kernel.fs.read_file(vp)})
+                except FSError as e:
+                    self._json(400, {"error": str(e)})
             elif u.path == "/api/ledger":
                 limit = 50
                 q = parse_qs(u.query)
