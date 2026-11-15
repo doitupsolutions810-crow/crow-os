@@ -18,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--objective", default="ship the kernel")
     r.add_argument("--model", default=None)
     r.add_argument("--ollama", default=None, help="Ollama base URL")
+    r.add_argument("--agent", default=None, help="run a user-created agent by id")
     sub.add_parser("verify")
     f_ = sub.add_parser("fs", help="the OS file system (operator view)")
     fsub = f_.add_subparsers(dest="fs_cmd", required=True)
@@ -25,13 +26,40 @@ def main(argv: list[str] | None = None) -> int:
     x = fsub.add_parser("cat"); x.add_argument("path")
     x = fsub.add_parser("write"); x.add_argument("path"); x.add_argument("text")
     fsub.add_parser("tree")
+    g_ = sub.add_parser("agent", help="user-created agents")
+    gsub = g_.add_subparsers(dest="agent_cmd", required=True)
+    x = gsub.add_parser("create"); x.add_argument("--name", required=True)
+    x.add_argument("--instructions", required=True)
+    x.add_argument("--model", default=None)
+    x.add_argument("--tools", default="", help="comma-separated, e.g. net.fetch,fs.read")
+    gsub.add_parser("list")
     s_ = sub.add_parser("serve", help="Crow OS Home Screen (web UI backed by the kernel)")
     s_.add_argument("--port", type=int, default=8787)
     a = p.parse_args(argv)
     home = Path(a.home)
+    if a.cmd == "agent":
+        from .agents import AgentError
+        kernel = Kernel(home)
+        try:
+            if a.agent_cmd == "create":
+                tools = [t.strip() for t in a.tools.split(",") if t.strip()]
+                agent = kernel.agents.create(a.name, a.instructions,
+                                             model=a.model, tools=tools)
+                print(json.dumps(agent, indent=2))
+            elif a.agent_cmd == "list":
+                for ag in kernel.agents.list():
+                    print(f"{ag['id']}  {ag['name']}  tools={ag['tools']}")
+        except AgentError as e:
+            print(f"agent error: {e}")
+            return 1
+        return 0
     if a.cmd == "run":
         kernel = Kernel(home)
-        job = kernel.run_llm(a.objective, model=a.model, base_url=a.ollama)
+        if getattr(a, "agent", None):
+            job = kernel.run_agent(a.objective, a.agent, model=a.model,
+                                   base_url=a.ollama)
+        else:
+            job = kernel.run_llm(a.objective, model=a.model, base_url=a.ollama)
         print(json.dumps(job, indent=2))
         return 0 if job["status"] == "completed" else 1
     if a.cmd == "demo":

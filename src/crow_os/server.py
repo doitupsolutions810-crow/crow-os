@@ -55,12 +55,24 @@ class HomeServer:
         }
 
     def start_run(self, objective: str, mode: str,
-                  model: str | None = None) -> dict[str, Any]:
+                  model: str | None = None,
+                  agent_id: str | None = None) -> dict[str, Any]:
         # One wiring path for both modes: the job is created up front
         # (so the caller always gets its id immediately and the run is
         # in the ledger even if the server dies), then the KERNEL's own
         # chain implementation executes it in a thread. There is no
         # second copy of the chain logic here to drift out of sync.
+        if agent_id:
+            agent = self.kernel.agents.get(agent_id)  # AgentError -> 400
+            job_id = self.kernel.workflow.create_job(
+                objective, chain=[agent_id, "governance"])
+            target = lambda: self.kernel.run_agent(  # noqa: E731
+                objective, agent_id, model=model, job_id=job_id)
+            t = threading.Thread(target=self._guarded, args=(job_id, target), daemon=True)
+            t.start()
+            self._threads.append(t)
+            return {"started": True, "mode": "agent", "agent": agent["id"],
+                    "job": self.kernel.workflow.get(job_id)}
         if mode == "auto":
             mode = "llm" if self.model_info()["reachable"] else "demo"
         job_id = self.kernel.workflow.create_job(objective)
@@ -131,6 +143,8 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/agents":
+                self._json(200, {"agents": home.kernel.agents.list()})
             elif u.path == "/api/fs":
                 from .fs import FSError
                 q = parse_qs(u.query)
@@ -162,8 +176,33 @@ def make_handler(home: HomeServer):
             else:
                 self._json(404, {"error": "not found"})
 
+        def do_DELETE(self):  # noqa: N802
+            u = urlparse(self.path)
+            if u.path.startswith("/api/agents/"):
+                from .agents import AgentError
+                try:
+                    home.kernel.agents.delete(u.path.rsplit("/", 1)[-1])
+                    return self._json(200, {"deleted": True})
+                except AgentError as e:
+                    return self._json(404, {"error": str(e)})
+            return self._json(404, {"error": "not found"})
+
         def do_POST(self):  # noqa: N802
             u = urlparse(self.path)
+            if u.path == "/api/agents":
+                from .agents import AgentError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    agent = home.kernel.agents.create(
+                        payload.get("name"), payload.get("instructions"),
+                        model=payload.get("model"),
+                        tools=payload.get("tools"))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except AgentError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(201, {"agent": agent})
             if u.path != "/api/run":
                 return self._json(404, {"error": "not found"})
             try:
@@ -182,7 +221,15 @@ def make_handler(home: HomeServer):
             model = payload.get("model")
             if model is not None and not isinstance(model, str):
                 return self._json(400, {"error": "model must be a string"})
-            self._json(202, home.start_run(objective, mode, model=model))
+            agent_id = payload.get("agent")
+            if agent_id is not None and not isinstance(agent_id, str):
+                return self._json(400, {"error": "agent must be a string"})
+            from .agents import AgentError
+            try:
+                self._json(202, home.start_run(objective, mode, model=model,
+                                               agent_id=agent_id))
+            except AgentError as e:
+                return self._json(400, {"error": str(e)})
 
         def _stream(self, job_id: str) -> None:
             """Server-sent events: the job's ledger entries as they land,

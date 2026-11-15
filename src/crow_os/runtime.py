@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .agents import AgentRegistry
 from .capabilities import Broker
 from .fs import CrowFS
 from .ledger import Ledger
@@ -44,6 +45,7 @@ class Kernel:
         self.workflow = Workflow(self.ledger)
         self.outputs: dict[str, dict[str, str]] = {}  # job_id -> plan/artifact (for the Home Screen code view)
         self.fs = CrowFS(home)  # the OS file system (<home>/fs)
+        self.agents = AgentRegistry(self.fs)  # user-created agents
         # Operator's explicit choice: may agent tools reach non-public
         # addresses (intranet)? Default NO — the SSRF guard refuses
         # loopback/RFC1918/link-local/metadata destinations.
@@ -88,6 +90,35 @@ class Kernel:
                            tools=ToolRunner(self.broker, cap,
                                             allow_private=self.allow_private_tools))
         job = worker.run(objective, cap, outputs=self.outputs, job_id=job_id)
+        if job["status"] == "completed":
+            self._persist_artifact(job["job_id"])
+        return job
+
+    def run_agent(self, objective: str, agent_id: str,
+                  model: str | None = None, base_url: str | None = None,
+                  job_id: str | None = None) -> dict[str, Any]:
+        """Run one user-created agent: its custom instructions are the
+        system prompt; it receives capabilities only for its granted
+        tools; governance still has the last word."""
+        from .worker import AgentWorker
+        agent = self.agents.get(agent_id)
+        rights = [{"method": "EXECUTE", "resource": f"jobs.{agent_id}"}]
+        rights += [{"method": "TOOL", "resource": t}
+                   for t in agent.get("tools") or []]
+        cap = self.broker.issue("crow-os/kernel", rights,
+                                ttl_seconds=900, rate_limit=20)
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or agent.get("model") or DEFAULT_MODEL)
+        from .tools import ToolRunner
+        tools = ToolRunner(self.broker, cap,
+                           allow_private=self.allow_private_tools)             if "net.fetch" in (agent.get("tools") or []) else None
+        worker = AgentWorker(self.broker, self.workflow, self.ledger,
+                             client, tools=tools)
+        if job_id is None:
+            job_id = self.workflow.create_job(
+                objective, chain=[agent_id, "governance"])
+        job = worker.run(objective, agent, cap,
+                         outputs=self.outputs, job_id=job_id)
         if job["status"] == "completed":
             self._persist_artifact(job["job_id"])
         return job

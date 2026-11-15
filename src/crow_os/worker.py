@@ -118,3 +118,72 @@ class LLMWorker:
             job["error"] = f"{type(e).__name__}: {e}"
             return job
         return self.workflow.get(job_id)
+
+
+class AgentWorker:
+    """Runs one user-created agent (v0.8).
+
+    The agent's custom instructions are its system prompt — data for
+    the model, never authority: the step still needs an EXECUTE
+    capability for jobs.<agent_id>, tools fire only if the agent was
+    granted them, and the chain still ends with deterministic
+    governance verifying the ledger.
+    """
+
+    def __init__(self, broker: Broker, workflow: Workflow, ledger: Ledger,
+                 client: OllamaClient, tools: ToolRunner | None = None):
+        self.broker = broker
+        self.workflow = workflow
+        self.ledger = ledger
+        self.client = client
+        self.tools = tools
+
+    def run(self, objective: str, agent: dict[str, Any], cap: dict[str, Any],
+            outputs: dict | None = None,
+            job_id: str | None = None) -> dict[str, Any]:
+        agent_id = agent["id"]
+        if job_id is None:
+            job_id = self.workflow.create_job(
+                objective, chain=[agent_id, "governance"])
+        else:
+            self.workflow.get(job_id)  # must already exist (pre-created)
+        role = agent_id
+        try:
+            self.broker.authorize(cap, "EXECUTE", f"jobs.{agent_id}")
+            context = ""
+            url_match = _URL_RE.search(objective)
+            if url_match and self.tools is not None and \
+                    "net.fetch" in (agent.get("tools") or []):
+                fetched = self.tools.fetch(url_match.group(0))
+                self.ledger.append("crow-os/tools", "tool.invoked", {
+                    "job_id": job_id, "tool": fetched["tool"],
+                    "host": fetched["host"], "status": fetched["status"],
+                    "bytes": fetched["bytes"]})
+                context = (f"\nFetched context from {fetched['url']} "
+                           f"(status {fetched['status']}):\n{fetched['excerpt']}\n")
+            if outputs is not None:
+                outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
+            reply = self.client.chat_stream(
+                agent["instructions"],
+                f"Objective: {objective}\n{context}",
+                on_token=(lambda t: outputs[job_id].__setitem__(
+                    "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
+            state = self.workflow.report(job_id, agent_id, bool(reply.strip()),
+                                         f"response chars={len(reply)}")
+            if outputs is not None:
+                outputs[job_id]["artifact"] = reply
+                outputs[job_id]["agent"] = agent["name"]
+            if state["status"] == "failed":
+                return state
+            role = "governance"
+            verdict = self.ledger.verify()
+            self.workflow.report(job_id, "governance", verdict["ok"],
+                                 f"ledger ok={verdict['ok']}")
+        except (CapabilityError, LLMUnavailable, ToolError) as e:
+            if self.workflow.get(job_id)["status"] == "running":
+                self.workflow.report(job_id, role, False,
+                                     f"{type(e).__name__}: {e}")
+            job = self.workflow.get(job_id)
+            job["error"] = f"{type(e).__name__}: {e}"
+            return job
+        return self.workflow.get(job_id)
