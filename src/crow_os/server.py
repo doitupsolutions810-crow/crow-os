@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .llm import DEFAULT_MODEL
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
@@ -29,26 +29,43 @@ class HomeServer:
         self._threads: list[threading.Thread] = []
 
     # -- API ------------------------------------------------------------
+    def model_info(self) -> dict[str, Any]:
+        """What the OS actually has installed: ask Ollama itself."""
+        client = OllamaClient()
+        try:
+            h = client.health()
+            return {"reachable": True, "base": DEFAULT_BASE,
+                    "active": DEFAULT_MODEL, "installed": h["models"],
+                    "active_installed": h["model_present"]}
+        except LLMUnavailable as e:
+            return {"reachable": False, "base": DEFAULT_BASE,
+                    "active": DEFAULT_MODEL, "installed": [],
+                    "active_installed": False, "error": str(e)}
+
     def status(self) -> dict[str, Any]:
         verdict = self.kernel.ledger.verify()
         return {
             "version": __version__,
             "home": str(self.kernel.home),
             "model": DEFAULT_MODEL,
+            "ollama": self.model_info(),
             "ledger": {"ok": verdict["ok"], "entries": verdict["entries"],
                        "errors": verdict["errors"][:5]},
             "jobs": len(self.kernel.workflow.jobs()),
         }
 
-    def start_run(self, objective: str, mode: str) -> dict[str, Any]:
+    def start_run(self, objective: str, mode: str,
+                  model: str | None = None) -> dict[str, Any]:
         # One wiring path for both modes: the job is created up front
         # (so the caller always gets its id immediately and the run is
         # in the ledger even if the server dies), then the KERNEL's own
         # chain implementation executes it in a thread. There is no
         # second copy of the chain logic here to drift out of sync.
+        if mode == "auto":
+            mode = "llm" if self.model_info()["reachable"] else "demo"
         job_id = self.kernel.workflow.create_job(objective)
         if mode == "llm":
-            target = lambda: self.kernel.run_llm(objective, job_id=job_id)  # noqa: E731
+            target = lambda: self.kernel.run_llm(objective, model=model, job_id=job_id)  # noqa: E731
         else:
             target = lambda: self.kernel.run_demo(objective, job_id=job_id)  # noqa: E731
         t = threading.Thread(target=self._guarded, args=(job_id, target), daemon=True)
@@ -102,6 +119,10 @@ def make_handler(home: HomeServer):
                 self.wfile.write(body)
             elif u.path == "/api/status":
                 self._json(200, home.status())
+            elif u.path == "/api/model":
+                self._json(200, home.model_info())
+            elif u.path.startswith("/api/jobs/") and u.path.endswith("/stream"):
+                self._stream(u.path.split("/")[3])
             elif u.path == "/api/jobs":
                 self._json(200, {"jobs": home.kernel.workflow.jobs()})
             elif u.path.startswith("/api/jobs/"):
@@ -137,10 +158,43 @@ def make_handler(home: HomeServer):
                 return self._json(400, {"error": "objective must be a non-empty string"})
             if len(objective) > 10_000:
                 return self._json(400, {"error": "objective too long (max 10000 chars)"})
-            mode = payload.get("mode", "demo")
-            if mode not in ("demo", "llm"):
-                return self._json(400, {"error": "mode must be 'demo' or 'llm'"})
-            self._json(202, home.start_run(objective, mode))
+            mode = payload.get("mode", "auto")
+            if mode not in ("demo", "llm", "auto"):
+                return self._json(400, {"error": "mode must be 'demo', 'llm' or 'auto'"})
+            model = payload.get("model")
+            if model is not None and not isinstance(model, str):
+                return self._json(400, {"error": "model must be a string"})
+            self._json(202, home.start_run(objective, mode, model=model))
+
+        def _stream(self, job_id: str) -> None:
+            """Server-sent events: the job's ledger entries as they land,
+            then the terminal status. This is the live feed the Home
+            Screen's thinking cards render from."""
+            try:
+                home.kernel.workflow.get(job_id)
+            except Exception:
+                return self._json(404, {"error": "no such job"})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            sent = 0
+            import time as _time
+            for _ in range(600):  # ~5 minutes max
+                detail = home.job_detail(job_id)
+                entries = detail["entries"]
+                while sent < len(entries):
+                    e = entries[sent]; sent += 1
+                    payload = json.dumps({"entry": e, "job": detail["job"],
+                                          "outputs": detail["outputs"]})
+                    try:
+                        self.wfile.write(f"data: {payload}\n\n".encode())
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                if detail["job"]["status"] != "running":
+                    return
+                _time.sleep(0.5)
 
         def log_message(self, *args):  # keep the terminal quiet
             pass

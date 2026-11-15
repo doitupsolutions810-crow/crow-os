@@ -267,3 +267,25 @@ class WiringRegressionTests(unittest.TestCase):
         from crow_os.workflow import WorkflowError
         with self.assertRaises(WorkflowError):
             kernel.run_demo("x", job_id="nope")
+
+    def test_concurrent_reads_never_see_torn_lines(self):
+        # Regression: unlocked reads racing locked appends intermittently
+        # stranded jobs (probe P12 flake). Readers now take LOCK_SH.
+        import threading as th
+        ledger = Ledger(Path(tempfile.mkdtemp()) / "l.jsonl")
+        errors, stop = [], []
+        def writer():
+            for i in range(40):
+                ledger.append("t", "x", {"n": i})
+        def reader():
+            while not stop:
+                try:
+                    for e in ledger.read():
+                        assert isinstance(e["seq"], int)
+                    ledger.verify()
+                except Exception as e:  # noqa: BLE001
+                    errors.append(e)
+        w = th.Thread(target=writer); r = th.Thread(target=reader)
+        r.start(); w.start(); w.join(); stop.append(True); r.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(ledger.verify()["entries"], 40)

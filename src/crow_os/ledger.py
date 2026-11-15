@@ -47,7 +47,7 @@ class Ledger:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a+") as f:
                 fcntl.flock(f, fcntl.LOCK_EX)
-                entries = self.read()
+                entries = self._read_unlocked()
                 prev = entries[-1] if entries else None
                 entry = {
                     "seq": (prev["seq"] + 1) if prev else 0,
@@ -66,7 +66,7 @@ class Ledger:
                 f.flush()
                 return entry
 
-    def read(self) -> list[dict[str, Any]]:
+    def _read_unlocked(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
         out = []
@@ -74,6 +74,23 @@ class Ledger:
             if line.strip():
                 out.append(json.loads(line))
         return out
+
+    def read(self) -> list[dict[str, Any]]:
+        # Shared-lock read: appends hold LOCK_EX for their whole
+        # read-modify-write, so a LOCK_SH reader can never observe a
+        # torn, half-written line. (Unlocked reads racing appends were
+        # the intermittent failure behind probe P12 under load.)
+        with self._lock:
+            if not self.path.exists():
+                return []
+            with self.path.open("r") as f:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                text = f.read()
+            out = []
+            for line in text.splitlines():
+                if line.strip():
+                    out.append(json.loads(line))
+            return out
 
     def verify(self) -> dict[str, Any]:
         """Return {ok, entries, errors}. Never raises for bad data."""

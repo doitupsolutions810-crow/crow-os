@@ -34,11 +34,25 @@ audit failure it prevents.
 - `scripts/check.sh` runs the unit suite plus every probe harness;
   CI runs it too.
 
-## v0.5 — fleet
+## v0.5 — Grok-style front end on the Ollama backend (shipped)
+
+- The Home Screen is now a chat-bot front end in the Grok mold: left
+  rail of chats/operations with search, a composer whose model
+  selector is populated from the OS's own Ollama (/api/model reads
+  /api/tags), and a slide-over Build panel (Code / App / Ledger /
+  Sandbox). All of it is a thin skin over the kernel backend.
+- Runs default to auto: LLM mode when the OS-installed Ollama is
+  reachable, demo runtime when it is not. Model choice in the UI is
+  honored end-to-end; chat streams token-by-token (live buffer in the
+  job outputs) and job progress streams over SSE with polling fallback.
+- Ledger reads take a shared lock: unlocked reads racing appends
+  could observe torn lines and strand jobs under load.
+
+## v0.6 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
-## v0.6 — federation
+## v0.7 — federation
 - mTLS peer links (living-intermediate's verified design), digest-checked
   ingest — no unauthenticated peers
 

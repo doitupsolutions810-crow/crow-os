@@ -34,8 +34,8 @@ def n1():
     code, page = req("GET", "/") if False else (None, None)
     with urllib.request.urlopen(B + "/", timeout=5) as resp:
         html = resp.read().decode()
-    ok = "Crow OS" in html and "textContent" in html and 'id="opslist"' in html
-    return ok, "home page serves with ops index + XSS-safe renderer present"
+    ok = "Crow OS" in html and "textContent" in html and 'id="chats"' in html and 'id="modelsel"' in html
+    return ok, "home page serves with operations rail, model selector + XSS-safe renderer present"
 
 def n2():
     code, d = req("POST", "/api/run", {"objective": ""})

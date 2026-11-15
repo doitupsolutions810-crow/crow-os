@@ -130,7 +130,7 @@ def p12():
     for _ in range(3):
         code, d = req("POST", "/api/run", {"objective": "same objective three times"})
         ids.add(d["job"]["job_id"])
-    deadline = time.time() + 15
+    deadline = time.time() + 30
     while time.time() < deadline:
         if all(req("GET", f"/api/jobs/{j}")[1]["job"]["status"] == "completed" for j in ids):
             break

@@ -48,8 +48,12 @@ class LLMWorker:
         try:
             # debugger (LLM)
             self.broker.authorize(cap, "EXECUTE", "jobs.debugger")
-            plan = self.client.chat(PROMPTS["debugger"],
-                                    f"Objective: {objective}\nJob: {job_id}")
+            if outputs is not None:
+                outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
+            plan = self.client.chat_stream(
+                PROMPTS["debugger"], f"Objective: {objective}\nJob: {job_id}",
+                on_token=(lambda t: outputs[job_id].__setitem__(
+                    "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
             state = self.workflow.report(job_id, "debugger", True,
                                          f"plan chars={len(plan)}")
             if state["status"] == "failed":
@@ -58,14 +62,20 @@ class LLMWorker:
             # coder (LLM)
             role = "coder"
             self.broker.authorize(cap, "EXECUTE", "jobs.coder")
-            artifact = self.client.chat(
+            if outputs is not None:
+                outputs[job_id]["live"] = ""
+            artifact = self.client.chat_stream(
                 PROMPTS["coder"],
                 f"Objective: {objective}\nPlan:\n{plan}\n"
-                f"Plan reference line: plan:{job_id}")
+                f"Plan reference line: plan:{job_id}",
+                on_token=(lambda t: outputs[job_id].__setitem__(
+                    "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
             state = self.workflow.report(job_id, "coder", bool(artifact.strip()),
                                          f"artifact chars={len(artifact)}")
             if outputs is not None:
-                outputs[job_id] = {"plan": plan, "artifact": artifact}
+                outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
+                outputs[job_id]["plan"] = plan
+                outputs[job_id]["artifact"] = artifact
             if state["status"] == "failed":
                 return state
 

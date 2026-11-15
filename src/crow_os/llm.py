@@ -49,6 +49,39 @@ class OllamaClient:
         names = [m.get("name", "") for m in tags.get("models", [])]
         return {"ok": True, "model_present": self.model in names, "models": names}
 
+    def chat_stream(self, system: str, user: str, on_token=None) -> str:
+        """Streamed chat: Ollama NDJSON tokens are passed to on_token as
+        they arrive (the Home Screen renders them live); the full text
+        is returned and held to the same fail-closed rules as chat()."""
+        self.calls += 1
+        req = urllib.request.Request(
+            self.base_url + "/api/chat",
+            data=json.dumps({
+                "model": self.model, "stream": True,
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": user}],
+            }).encode(),
+            headers={"Content-Type": "application/json"})
+        parts: list[str] = []
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                for line in r:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    obj = json.loads(line)
+                    piece = (obj.get("message") or {}).get("content", "")
+                    if isinstance(piece, str) and piece:
+                        parts.append(piece)
+                        if on_token is not None:
+                            on_token(piece)
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+            raise LLMUnavailable(f"ollama unreachable at {self.base_url}: {e}") from e
+        content = "".join(parts)
+        if not content.strip():
+            raise LLMUnavailable("ollama returned an empty streamed response")
+        return content
+
     def chat(self, system: str, user: str) -> str:
         self.calls += 1
         out = self._post("/api/chat", {
