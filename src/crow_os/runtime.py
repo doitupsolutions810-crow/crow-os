@@ -116,6 +116,7 @@ class Kernel:
         if depth > self.MAX_SPAWN_DEPTH:
             raise ValueError(
                 f"spawn depth cap ({self.MAX_SPAWN_DEPTH}) reached")
+        self.agents.get(agent_id)  # validate BEFORE attesting the spawn
         child_id = self.workflow.create_job(
             objective, chain=[agent_id, "governance"])
         self._spawn_depth[child_id] = depth
