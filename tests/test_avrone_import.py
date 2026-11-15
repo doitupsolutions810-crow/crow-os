@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -139,6 +140,36 @@ class AvroneImportTests(unittest.TestCase):
         with self.assertRaises(AvroneImportError):
             import_avrone_journal(self.kernel, self.path)
         self.assertEqual(self.ledger.read(), [])
+
+    def test_parallel_threads_import_each_id_once(self):
+        self.write(self.record("one"), self.record("two"))
+        barrier = threading.Barrier(8)
+        results, errors = [], []
+        def run():
+            try:
+                barrier.wait(timeout=5)
+                results.append(import_avrone_journal(self.kernel, self.path))
+            except Exception as e:
+                errors.append(e)
+        threads = [threading.Thread(target=run) for _ in range(8)]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(timeout=10)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 8)
+        self.assertEqual(sum(x["accepted"] for x in results), 2)
+        self.assertEqual(len(self.ledger.read()), 2)
+
+    def test_unsafe_lock_symlink_denies_import(self):
+        self.write(self.record())
+        ledgerfile = Path(self.t.name) / "ledger.jsonl"
+        self.ledger.path = ledgerfile
+        protected = Path(self.t.name) / "protected"
+        protected.write_text("keep")
+        (ledgerfile.parent / ".avrone-import.lock").symlink_to(protected)
+        with self.assertRaises(AvroneImportError):
+            import_avrone_journal(self.kernel, self.path)
+        self.assertFalse(self.ledger.read())
+        self.assertEqual(protected.read_text(), "keep")
 
     def test_101_posts_rejected_without_mutation(self):
         self.write(*[self.record(f"id-{i}") for i in range(101)])

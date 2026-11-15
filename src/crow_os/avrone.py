@@ -6,11 +6,14 @@ local JSONL file. Every record is validated before any ledger append occurs.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
 import re
 import stat
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,34 @@ ID = re.compile(r"[A-Za-z0-9_.:-]{1,80}\Z", re.ASCII)
 
 class AvroneImportError(ValueError):
     pass
+
+
+_LOCAL_IMPORT_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def _import_lock(ledger: Any):
+    """Serialize read-check-append across threads and independent processes."""
+    path = getattr(ledger, "path", None)
+    if path is None:
+        with _LOCAL_IMPORT_LOCK:
+            yield
+        return
+    lockfile = Path(path).with_name(".avrone-import.lock")
+    try:
+        fd = os.open(lockfile, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) |
+                     getattr(os, "O_NONBLOCK", 0), 0o600)
+        with os.fdopen(fd, "a+b") as stream:
+            meta = os.fstat(stream.fileno())
+            if not stat.S_ISREG(meta.st_mode) or meta.st_nlink != 1:
+                raise AvroneImportError("unsafe AVRONE import lock")
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    except OSError as e:
+        raise AvroneImportError("AVRONE import lock unavailable") from e
 
 
 def _string(value: Any, field: str, maxlen: int, *, required: bool = False) -> str:
@@ -106,25 +137,26 @@ def import_avrone_journal(kernel: Any, path: str | Path) -> dict[str, Any]:
     """
     source = Path(path)
     rows, digest = _read(source)
-    verdict = kernel.ledger.verify()
-    if not verdict.get("ok"):
-        raise AvroneImportError("Crow OS ledger verification failed before import")
-    seen = set()
-    for e in kernel.ledger.read():
-        if e.get("kind") != "avrone.observation":
-            continue
-        body = e.get("raw") or {}
-        seen.add((body.get("run_id"), body.get("id")))
-    accepted, duplicates = 0, 0
-    for row in rows:
-        key = (row["run_id"], row["id"])
-        if key in seen:
-            duplicates += 1
-            continue
-        body = {**row, "untrusted": True, "source_file": source.name,
-                "source_sha256": digest}
-        kernel.ledger.append("integration/avrone", "avrone.observation", body)
-        seen.add(key)
-        accepted += 1
-    return {"accepted": accepted, "duplicates": duplicates,
-            "source_sha256": digest, "ledger_ok": kernel.ledger.verify()["ok"]}
+    with _import_lock(kernel.ledger):
+        verdict = kernel.ledger.verify()
+        if not verdict.get("ok"):
+            raise AvroneImportError("Crow OS ledger verification failed before import")
+        seen = set()
+        for e in kernel.ledger.read():
+            if e.get("kind") != "avrone.observation":
+                continue
+            body = e.get("raw") or {}
+            seen.add((body.get("run_id"), body.get("id")))
+        accepted, duplicates = 0, 0
+        for row in rows:
+            key = (row["run_id"], row["id"])
+            if key in seen:
+                duplicates += 1
+                continue
+            body = {**row, "untrusted": True, "source_file": source.name,
+                    "source_sha256": digest}
+            kernel.ledger.append("integration/avrone", "avrone.observation", body)
+            seen.add(key)
+            accepted += 1
+        return {"accepted": accepted, "duplicates": duplicates,
+                "source_sha256": digest, "ledger_ok": kernel.ledger.verify()["ok"]}
