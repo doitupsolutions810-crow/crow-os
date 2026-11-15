@@ -22,7 +22,7 @@ from .plugins import PluginRegistry
 from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient, resolve_model  # noqa: F401
 from .workflow import Workflow
 from .worker import LLMWorker
 
@@ -75,7 +75,10 @@ class Kernel:
             return  # best-effort; the job already completed
         self.ledger.append("crow-os/tools", "tool.invoked", {
             "job_id": job_id, "tool": rec["tool"], "path": rec["path"],
-            "bytes": rec["bytes"]})
+            "bytes": rec["bytes"],
+            # The kernel saved the artifact under its own short-lived cap. Without
+            # this, an agent with no fs.write grant looked like it had written.
+            "by": "kernel"})
         self.outputs[job_id]["saved_to"] = rec["path"]
 
     def run_llm(self, objective: str, model: str | None = None,
@@ -83,8 +86,8 @@ class Kernel:
                 job_id: str | None = None,
                 tools_enabled: bool = True) -> dict[str, Any]:
         """Full chain with an LLM behind the capability gate (v0.2)."""
-        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
-                              model=model or DEFAULT_MODEL)
+        base = base_url or DEFAULT_BASE
+        client = OllamaClient(base_url=base, model=resolve_model(model, base))
         cap = self.broker.issue(
             "crow-os/kernel",
             [{"method": "EXECUTE", "resource": "jobs.debugger"},
@@ -140,8 +143,8 @@ class Kernel:
                    for t in agent.get("tools") or []]
         cap = self.broker.issue("crow-os/kernel", rights,
                                 ttl_seconds=900, rate_limit=20)
-        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
-                              model=model or agent.get("model") or DEFAULT_MODEL)
+        base = base_url or DEFAULT_BASE
+        client = OllamaClient(base_url=base, model=resolve_model(model or agent.get("model"), base))
         from .tools import ToolRunner
         tools = ToolRunner(self.broker, cap,
                            allow_private=self.allow_private_tools) \

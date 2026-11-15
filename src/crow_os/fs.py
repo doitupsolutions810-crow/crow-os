@@ -24,6 +24,7 @@ Standard tree (created on first boot):
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 
 MAX_FILE_BYTES = 262_144  # 256KB
@@ -128,9 +129,36 @@ class CrowFS:
         parent_real = real.parent.resolve()
         if parent_real != self._root_real and self._root_real not in parent_real.parents:
             raise FSError(f"path escapes the file system: {vpath}")
-        tmp = real.parent / f".{real.name}.tmp"
-        tmp.write_bytes(data)
-        os.replace(tmp, real)
+        # A unique temp name: the old fixed ".<name>.tmp" made two concurrent
+        # writes of one file race on the same temp, and one os.replace failed.
+        tmp = real.parent / f".{real.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, real)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+        return {"path": self.virtual(real), "bytes": len(data)}
+
+    def create_file(self, vpath: str, content: str) -> dict:
+        """Write a NEW file atomically; FileExistsError if the name is taken.
+        os.link of a finished temp file never overwrites and never exposes a
+        half-written file, so callers can claim a name without a check-then-write race."""
+        data = content.encode("utf-8")
+        if len(data) > MAX_FILE_BYTES:
+            raise FSError(f"content too large: {len(data)} > {MAX_FILE_BYTES} bytes")
+        real = self.resolve(vpath)
+        real.parent.mkdir(parents=True, exist_ok=True)
+        parent_real = real.parent.resolve()
+        if parent_real != self._root_real and self._root_real not in parent_real.parents:
+            raise FSError(f"path escapes the file system: {vpath}")
+        tmp = real.parent / f".{real.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        try:
+            tmp.write_bytes(data)
+            os.link(tmp, real)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
         return {"path": self.virtual(real), "bytes": len(data)}
 
     def mkdir(self, vpath: str) -> dict:

@@ -168,6 +168,23 @@ Manage your devices, Permissions (capability grants per agent).
   chat message can now fetch a page, read a file and delegate —
   all in one governed run.
 
+## v0.13.1: live round 2 + restored fixes (shipped)
+
+- **Restored again.** The v0.12.0 source commit was built from a pre-v0.11.3 copy, which silently dropped the v0.9.1 local-Ollama fixes and the v0.11.3 agent-API fixes. That left tests/test_v09_local_ollama.py and test_v12_agents_hostile.py at 10 failures and 14 errors. Both are re-applied. **Before rebuilding a src file from a copy, pull and run `scripts/check.sh`.** Those two test files catch the drop.
+- **Found by driving the live server on qwen2.5:3b (probes/live_ollama_session2.py):**
+  - 12 parallel creates of an agent with the same name gave 11 ids: two shared `racer-2`, one overwrote the other's instructions, and one request crashed. CrowFS now has `create_file`, which claims a name atomically via os.link, and `write_file` uses a unique temp name.
+  - net.fetch checked DNS once and then urllib resolved again on connect. That is a DNS-rebinding window (public on check, 127.0.0.1 on connect). Direct connections now check the exact address they dial.
+  - The SSRF guard let 100.64.0.0/10 (CGNAT) and IPv6 forms that embed IPv4 (NAT64 64:ff9b::/96, 6to4 2002::/16) through. Only globally routable addresses pass now.
+  - Any unexpected handler error dropped the connection. It now answers 500 JSON, never the exception text, and logs to stderr.
+  - The kernel's own artifact save showed up as `tool.invoked fs.write` on jobs whose agent had no fs.write grant. It is now marked `by: kernel`.
+- **Held under live attack:**
+  - 10 SSRF URLs refused (loopback in decimal, hex, short and IPv6 forms, `localhost.`, metadata, RFC1918).
+  - Self-delegation terminates.
+  - fs-directive traversal is refused.
+  - A Content-Length of 2 MB is rejected with a 400.
+- **Live results:** Net Scout (net.fetch + fs.list) completed the hardening order. The 4-role chain completed. The ledger verified. There were 0 tracebacks.
+- **Tests:** tests/test_v13_live_round2.py (6 tests; 5 failed on the old code) and probes/edge_harness17.py.
+
 ## v0.14 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
