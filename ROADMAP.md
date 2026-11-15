@@ -12,13 +12,23 @@ audit failure it prevents.
 - Ed25519 capability signer alongside the HMAC dev signer; verify-only
   brokers hold just a public key
 - Still open: persistent broker state (revocations, lineage, usage) in
-  the ledger; Avrone-style HMAC fleet dispatch arrives with v0.3
+  the ledger; Avrone-style HMAC fleet dispatch arrives with v0.4
 
-## v0.3 — fleet
+## v0.3 — home screen (shipped)
+
+- `crow serve`: the OS Home Screen — chat with the squad, a live
+  operations index, expandable per-agent thinking cards rendered from
+  the signed ledger's own event stream, sandbox bar, code/app views
+  and a ledger inspector. Runs execute on the real kernel in threads;
+  a crashed run fails its job in the ledger instead of stranding it.
+- Persistent broker state is signed and written atomically under a
+  lock (concurrent runs cannot race it).
+
+## v0.4 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
-## v0.4 — federation
+## v0.5 — federation
 - mTLS peer links (living-intermediate's verified design), digest-checked
   ingest — no unauthenticated peers
 

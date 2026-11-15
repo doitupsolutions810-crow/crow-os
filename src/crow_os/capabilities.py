@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -42,6 +43,7 @@ class Broker:
         # Optional file-backed state: revocations, lineage and usage are
         # shared by every broker opened on the same home, so a revocation
         # survives restarts and reaches other processes (probe C7).
+        self._lock = threading.Lock()
         self._state_path = Path(state_path) if state_path else None
         if self._state_path and self._state_path.exists():
             saved = json.loads(self._state_path.read_text())
@@ -59,17 +61,22 @@ class Broker:
     def _persist(self) -> None:
         if not self._state_path:
             return
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        state = {
-            "revoked": sorted(self._revoked),
-            "lineage": self._lineage,
-            "usage": self._usage,
-            "root_limits": self._root_limits,
-        }
-        state["sig"] = self._signer.sign(state)
-        tmp = self._state_path.with_suffix(self._state_path.suffix + ".tmp")
-        tmp.write_text(json.dumps(state, sort_keys=True) + "\n")
-        tmp.replace(self._state_path)  # atomic: no torn state files
+        # Serialized + uniquely-named temp file: two threads sharing one
+        # fixed .tmp name raced — the first replace() consumed the file
+        # and the second crashed with FileNotFoundError (probe N6).
+        with self._lock:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            state = {
+                "revoked": sorted(self._revoked),
+                "lineage": self._lineage,
+                "usage": self._usage,
+                "root_limits": self._root_limits,
+            }
+            state["sig"] = self._signer.sign(state)
+            tmp = self._state_path.with_name(
+                f"{self._state_path.name}.{uuid.uuid4().hex[:8]}.tmp")
+            tmp.write_text(json.dumps(state, sort_keys=True) + "\n")
+            tmp.replace(self._state_path)  # atomic: no torn state files
 
     def _sign(self, cap: dict[str, Any]) -> str:
         body = {k: v for k, v in cap.items() if k != "sig"}

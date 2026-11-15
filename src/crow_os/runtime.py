@@ -10,6 +10,7 @@ The demo workers do real checks instead of rubber-stamping:
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +34,14 @@ class Kernel:
                 f"crow-os:{self.home.resolve()}".encode()).digest())
         secret = secret_path.read_bytes()
         self.ledger = Ledger(self.home / "ledger.jsonl", signer=HmacSigner(secret))
+        if not self.ledger.path.exists():
+            # A kernel home always has its ledger: an absent file then
+            # means external deletion, which verify() rightly treats as
+            # an error, while a fresh home reads as an empty, valid chain.
+            self.ledger.path.touch()
         self.broker = Broker(secret, state_path=self.home / "broker_state.json")
         self.workflow = Workflow(self.ledger)
+        self.outputs: dict[str, dict[str, str]] = {}  # job_id -> plan/artifact (for the Home Screen code view)
 
     def run_llm(self, objective: str, model: str | None = None,
                 base_url: str | None = None) -> dict[str, Any]:
@@ -47,7 +54,7 @@ class Kernel:
              {"method": "EXECUTE", "resource": "jobs.coder"}],
             ttl_seconds=900, rate_limit=10)
         worker = LLMWorker(self.broker, self.workflow, self.ledger, client)
-        return worker.run(objective, cap)
+        return worker.run(objective, cap, outputs=self.outputs)
 
     def run_demo(self, objective: str) -> dict[str, Any]:
         cap = self.broker.issue(
@@ -71,6 +78,8 @@ class Kernel:
         results = [f"plan:{job_id}" in artifact, len(artifact) > 0]
         self.workflow.report(job_id, "tester", all(results),
                              f"criteria {sum(results)}/{len(results)}")
+
+        self.outputs[job_id] = {"plan": json.dumps(plan, indent=2), "artifact": artifact}
 
         # governance: the trust layer must verify before completion
         verdict = self.ledger.verify()

@@ -46,6 +46,9 @@ class Workflow:
                     job["status"] = "failed"
         return jobs
 
+    def jobs(self) -> list[dict[str, Any]]:
+        return list(self._jobs().values())
+
     def create_job(self, objective: str) -> str:
         job_id = uuid.uuid4().hex[:12]
         self.ledger.append("crow-os", "job.created",

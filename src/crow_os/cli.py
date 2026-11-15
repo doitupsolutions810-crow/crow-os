@@ -19,6 +19,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--model", default=None)
     r.add_argument("--ollama", default=None, help="Ollama base URL")
     sub.add_parser("verify")
+    s_ = sub.add_parser("serve", help="Crow OS Home Screen (web UI backed by the kernel)")
+    s_.add_argument("--port", type=int, default=8787)
     a = p.parse_args(argv)
     home = Path(a.home)
     if a.cmd == "run":
@@ -31,6 +33,13 @@ def main(argv: list[str] | None = None) -> int:
         job = kernel.run_demo(a.objective)
         print(json.dumps(job, indent=2))
         return 0 if job["status"] == "completed" else 1
+    if a.cmd == "serve":
+        from .server import serve
+        try:
+            return serve(Kernel(home), a.port)
+        except OSError as e:
+            print(f"cannot serve on port {a.port}: {e}")
+            return 2
     if a.cmd == "verify":
         verdict = Ledger(home / "ledger.jsonl").verify()
         print(json.dumps(verdict, indent=2))

@@ -37,7 +37,8 @@ class LLMWorker:
         self.ledger = ledger
         self.client = client
 
-    def run(self, objective: str, cap: dict[str, Any]) -> dict[str, Any]:
+    def run(self, objective: str, cap: dict[str, Any],
+            outputs: dict | None = None) -> dict[str, Any]:
         job_id = self.workflow.create_job(objective)
         role = "debugger"
         try:
@@ -59,6 +60,8 @@ class LLMWorker:
                 f"Plan reference line: plan:{job_id}")
             state = self.workflow.report(job_id, "coder", bool(artifact.strip()),
                                          f"artifact chars={len(artifact)}")
+            if outputs is not None:
+                outputs[job_id] = {"plan": plan, "artifact": artifact}
             if state["status"] == "failed":
                 return state
 
