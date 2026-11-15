@@ -71,6 +71,26 @@
   .agentrow:hover{background:var(--panel)}
   .agentrow.on{border-left-color:#4caf7d;background:var(--panel)}
   .agentrow span{display:block;color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  body:not(.dev) .devonly{display:none !important}
+  #chathead{display:flex;align-items:center;gap:10px;padding:8px 18px;font-size:13px;color:var(--dim)}
+  #chathead .sp{flex:1}
+  .iconbtn{background:none;border:none;color:var(--dim);font-size:16px;cursor:pointer;padding:4px 8px;border-radius:8px}
+  .iconbtn:hover{background:var(--panel);color:var(--txt)}
+  #railfoot{display:flex;align-items:center;gap:9px}
+  .avatar{width:28px;height:28px;border-radius:50%;background:#333;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+  #settings{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:60}
+  #settings.open{display:flex}
+  #settings .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;max-width:520px;width:92%;max-height:84vh;overflow:auto;padding:20px 22px}
+  #settings h2{margin:0 0 4px;font-size:17px}
+  #settings .row{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}
+  #settings .row .grow{flex:1}
+  #settings .row small{display:block;color:var(--dim);margin-top:2px}
+  .switch{position:relative;width:40px;height:22px;flex:none}
+  .switch input{opacity:0;width:100%;height:100%;position:absolute;margin:0;cursor:pointer}
+  .switch i{position:absolute;inset:0;background:#3a3a3a;border-radius:99px;transition:.15s}
+  .switch i:after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:3px;left:3px;transition:.15s}
+  .switch input:checked + i{background:#4caf7d}
+  .switch input:checked + i:after{left:21px}
   /* composer — Grok-style */
   #composerwrap{padding:10px 18px 18px}
   #composer{max-width:780px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:10px 12px 8px}
@@ -113,16 +133,22 @@
     <button id="agcreate" type="submit">Create agent</button>
     <div class="hint" id="agerr"></div>
   </form>
-  <div id="railfoot">🤖 <b id="footmodel">—</b><br><span id="footbase">Ollama: —</span></div>
+  <div id="railfoot"><span class="avatar">B</span><span>Brandon</span>
+    <button class="iconbtn" id="setbtn2" title="Settings">⚙️</button>
+    <span class="devonly" style="font-size:11px">🤖 <b id="footmodel">—</b> · <span id="footbase">Ollama: —</span></span>
+  </div>
 </aside>
 
 <section id="main">
-  <div id="topbar">
+  <div id="chathead">
+    <span id="chatwho">🐦‍⬛ Crow OS</span><span class="sp"></span>
+    <button class="iconbtn" id="setbtn" title="Settings">⚙️</button>
+  </div>
+  <div id="topbar" class="devonly">
     <div>📜 Ledger <b id="sb-entries">—</b></div>
     <div>🔗 <b id="sb-verify">—</b></div>
     <div>🏠 <b id="sb-home">—</b></div>
     <div>⚙️ Kernel <b id="sb-ver">—</b></div>
-    <select id="modelsel"><option value="">Loading models…</option></select>
     <button id="buildbtn">🛠️ Build panel</button>
   </div>
   <div id="msgs"><div class="col" id="msgcol">
@@ -142,12 +168,23 @@
       <textarea id="objective" rows="1" placeholder="Ask anything"></textarea>
       <div class="crow">
         <button id="plusbtn" type="button" title="New chat">＋</button>
-        <span class="hint" id="modehint">backend: —</span>
+        <select id="modelsel" aria-label="Model select"><option value="">Loading models…</option></select>
+        <span class="hint" id="modehint"></span>
         <button id="send" type="submit" title="Run">↑</button>
       </div>
     </form>
   </div>
 </section>
+
+<div id="settings"><div class="card">
+  <h2>Settings</h2>
+  <div style="color:var(--dim);font-size:12.5px">Chat and Agents are the whole surface by default. Everything else in Crow OS runs on the backend — turn it on here only if you want to see it.</div>
+  <div class="row"><div class="grow"><b>Developer panels</b><small>Build panel (Code · App · Ledger · Sandbox · Files) and the system status bar.</small></div>
+    <label class="switch"><input type="checkbox" id="set-dev"><i></i></label></div>
+  <div class="row"><div class="grow"><b>Backend</b><small id="set-backend">—</small></div></div>
+  <div class="row" style="border-bottom:none"><div class="grow"><b>About</b><small>Crow OS — governed agents on your OS-installed Ollama. Every run is capability-gated and written to the signed ledger, whether or not you choose to look at it.</small></div></div>
+  <button id="setclose" style="margin-top:8px">Done</button>
+</div></div>
 
 <aside id="build">
   <header>
@@ -423,6 +460,31 @@ async function readFs(path){
     $("#filecontent").textContent=d.error?("⚠ "+d.error):d.content; }
   catch(_){ $("#filecontent").textContent="Cannot read file."; }
 }
+
+/* ── settings: everything but Chat + Agents is opt-in ── */
+const SETTINGS_KEY="crow-os-settings";
+let settings={}; try{ settings=JSON.parse(localStorage.getItem(SETTINGS_KEY)||"{}"); }catch(_){}
+function applySettings(){
+  document.body.classList.toggle("dev", !!settings.dev);
+  const t=$("#set-dev"); if(t) t.checked=!!settings.dev;
+  if(!settings.dev){ const b=$("#build"); if(b) b.classList.remove("open"); }
+}
+function saveSettings(){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }catch(_){} }
+function openSettings(){
+  const fm=$("#footmodel"), fb=$("#footbase"), sb=$("#set-backend");
+  if(sb) sb.textContent="Model: "+(fm?fm.textContent:"—")+" · "+(fb?fb.textContent:"—");
+  $("#settings").classList.add("open");
+}
+["#setbtn","#setbtn2"].forEach(id=>{ const el=$(id); if(el) el.addEventListener("click",openSettings); });
+$("#setclose").addEventListener("click",()=>$("#settings").classList.remove("open"));
+$("#settings").addEventListener("click",e=>{ if(e.target.id==="settings") e.target.classList.remove("open"); });
+$("#set-dev").addEventListener("change",e=>{ settings.dev=e.target.checked; saveSettings(); applySettings(); });
+applySettings();
+
+/* Grok behavior: the send button appears once the composer has content */
+const _obj=$("#objective"), _send=$("#send");
+function _sendVis(){ _send.style.visibility=_obj.value.trim()?"visible":"hidden"; }
+_obj.addEventListener("input",_sendVis); _sendVis();
 
 /* ── custom agents ── */
 let selectedAgent=null;
