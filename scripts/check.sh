@@ -3,13 +3,6 @@
 # Usage: scripts/check.sh [python]
 set -e
 PY="${1:-python3}"
-# Probe clients talk to servers on 127.0.0.1; a proxy in the environment must not catch them.
-export NO_PROXY="127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}"
-export no_proxy="$NO_PROXY"
-# Hermetic: the probes expect no Ollama on the default endpoint (auto mode -> demo).
-# Live checks: CROW_OS_LIVE_OLLAMA=1 python3 -m unittest tests.test_v09_local_ollama
-#              and probes/live_ollama_session.py against a running server.
-export OLLAMA_HOST="127.0.0.1:9"
 cd "$(dirname "$0")/.."
 echo "== unit tests"
 $PY -m unittest discover -s tests

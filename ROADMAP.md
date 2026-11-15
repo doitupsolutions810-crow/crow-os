@@ -148,17 +148,17 @@ are verified / built-in / user-asserted, never faked), Bot Computer
 ("the one computer your agents share" — real disk and home sizes),
 Manage your devices, Permissions (capability grants per agent).
 
-## v0.11.3: live-run fixes + the v0.9.1 Ollama fixes restored (shipped)
+## v0.12 — output the chats (shipped)
 
-- **Restored.** The v0.10.0 source commit was built from a pre-v0.9.1 copy, so the v0.9.1 local-Ollama fixes in llm/worker/runtime/server and check.sh were silently dropped. That left 8 failures and 12 errors in tests/test_v09_local_ollama.py, plus 4 red v0.2 tests on any proxied box. Those fixes are now re-applied on top of v0.11. The hostile-Ollama probes are now probes/edge_harness15.py.
-- **Found by driving a live server on qwen2.5:3b through Chat and the agents API:**
-  - Every POST route crashed its handler thread on a JSON body that wasn't an object (`[]`, `null`, `"s"`), and on a negative Content-Length. The client got a dropped connection instead of a 400. All POST routes now 400.
-  - Agent creation crashed on an avatar that wasn't an object, and stored a model that wasn't a string (5), a tools dict, and NUL or ANSI characters in names and instructions. All of these are now rejected with a 400.
-  - An agent id in run, spawn, get or delete could be `../../home/notes`, which read (or deleted) any .json in the user FS as an agent definition. Ids must now be slugs.
-  - `agents.list()` crashed on a hand-edited definition with no `created` field.
-- **Tests:** tests/test_v12_agents_hostile.py (9 tests: 6 failures and 2 errors on v0.11.0). probes/live_ollama_session.py is the live driver. Live results: an Edge Hunter agent with net.fetch and net.resolve ran the hardening order in 98 s and fetched example.com (logged as `tool.invoked`); the 4-role chat chain completed in 36 s; the signed ledger verified.
+- Every job exports as a Markdown transcript — the user's message,
+  each agent's output, tool invocations, sub-agent links, steps and
+  the governance verdict — assembled from the workflow record, the
+  outputs sink and the signed ledger, so the export is what was
+  attested. GET /api/jobs/<id>/transcript and `crow transcript
+  <job_id>`; transcripts stay complete after a restart by falling
+  back to the persisted artifact in Documents.
 
-## v0.12 — fleet
+## v0.13 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
