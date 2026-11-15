@@ -146,6 +146,21 @@ def watch_mission(client: CrowChat, jobs: list[dict], *, deadline: float = 120,
             if not isinstance(state, dict) or state.get("status") not in ("running", "failed", "completed"):
                 raise MissionError("Crow OS job state malformed")
             job["status"] = state["status"]
+            if isinstance(state.get("error"), str):
+                job["error"] = state["error"][:600]
+            # A granted network capability is not evidence it was used.
+            # Only ledger events returned by the running kernel can
+            # establish that a network tool was actually invoked.
+            entries = detail.get("entries")
+            if isinstance(entries, list):
+                job["ledger_events_observed"] = len(entries)
+                job["network_calls_observed"] = sum(
+                    1 for entry in entries if isinstance(entry, dict)
+                    and entry.get("kind") == "tool.invoked"
+                    and isinstance(entry.get("raw"), dict)
+                    and entry["raw"].get("tool") in ("net.fetch", "net.resolve"))
+            else:
+                job["network_calls_observed"] = None
             if job["status"] != "running":
                 remaining.remove(job["job_id"])
                 job["terminal"] = True
