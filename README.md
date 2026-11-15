@@ -103,3 +103,27 @@ earlier test stubs. Only localhost is selected by default; remote Ollama is
 an explicit operator configuration.
 
 See [the source and verification registry](docs/registry/avrone-local-ollama-2026-11-15.md).
+
+
+## Four-agent local chat mission
+
+Crow OS already provides a **New agent** form in the Home Screen. Users can
+name agents, write multiline custom instructions, choose avatars, and
+explicitly grant tools; definitions persist across restarts.
+
+With a local Ollama model running, start Crow OS in one terminal:
+
+    PYTHONPATH=src python3 -m crow_os serve --port 8787
+
+In another terminal, review and then launch the mission:
+
+    python3 scripts/edge_mission.py --dry-run
+    python3 scripts/edge_mission.py --enable-network --deadline 180 \
+      --evidence crow-os-edge-mission-results.json
+
+This sends the requested edge-hardening directive as the first line to four
+named agents, with a public Crow OS source URL appended when networking is
+explicitly enabled. The runner watches job status, writes a local audit JSON
+file, and never converts incomplete/failed jobs into false success claims.
+It does not grant arbitrary shell access or auto-merge suggested changes.
+See the [mission evidence registry](docs/registry/agent-mission-evidence-2026-11-15.md).
