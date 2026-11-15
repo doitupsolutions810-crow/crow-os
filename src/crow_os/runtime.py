@@ -151,8 +151,13 @@ class Kernel:
             spawner = lambda parent_id, sub_id, sub_obj: \
                 self.spawn_subagent(parent_id, sub_id, sub_obj,
                                     base_url=base_url, model=model)
+        from .tools import FileTools
+        file_tools = FileTools(self.broker, cap, self.fs) \
+            if tools_enabled and any(t.startswith("fs.")
+                                     for t in agent.get("tools") or []) else None
         worker = AgentWorker(self.broker, self.workflow, self.ledger,
-                             client, tools=tools, spawner=spawner)
+                             client, tools=tools, spawner=spawner,
+                             file_tools=file_tools)
         if job_id is None:
             job_id = self.workflow.create_job(
                 objective, chain=[agent_id, "governance"])
