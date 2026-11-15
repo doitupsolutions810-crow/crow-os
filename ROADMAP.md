@@ -62,11 +62,29 @@ audit failure it prevents.
   the operator's explicit opt-in (Kernel allow_private_tools /
   CROW_OS_ALLOW_PRIVATE_TOOLS=1); the default posture refuses them.
 
-## v0.7 — fleet
+## v0.7 — the file system + Grok-look polish (shipped)
+
+- CrowFS: the OS now has its entire file system — a standard tree
+  (/system, /home/user/{Documents,Downloads,Pictures,Music}, /apps,
+  /var/{log,cache}, /tmp) rooted at <home>/fs, speaking virtual paths
+  that can never name a host file. Traversal and symlink escapes are
+  refused, writes are atomic and size-capped, and agent access is
+  capability-gated (TOOL fs.list/fs.read/fs.write) and attested.
+  Completed jobs persist their artifacts to
+  /home/user/Documents/<job>.md through the gated tool. Operator
+  surface: `crow fs ls|cat|write|tree`, /api/fs + /api/fs/read, and a
+  Files tab in the Build panel.
+- Front end, closer to Grok so the system reads at a glance: "What do
+  you want to know?" greeting with suggestion cards (one runs the
+  edge-case instruction, one fetches a page, one opens the file
+  system, one verifies the ledger), "Ask anything" composer with a
+  ＋ button, and the model selector moved to the top bar.
+
+## v0.8 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
-## v0.8 — federation
+## v0.9 — federation
 - mTLS peer links (living-intermediate's verified design), digest-checked
   ingest — no unauthenticated peers
 

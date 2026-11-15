@@ -132,7 +132,8 @@ def t9():
         k = Kernel(tmp(), allow_private_tools=True)
         job = k.run_llm(f"summarize {T}/page please",
                         base_url=f"http://127.0.0.1:{stub.server_address[1]}")
-        invoked = [e for e in k.ledger.read() if e["kind"] == "tool.invoked"]
+        invoked = [e for e in k.ledger.read() if e["kind"] == "tool.invoked"
+                   and e["raw"].get("tool") == "net.fetch"]
         artifact = (k.outputs.get(job["job_id"]) or {}).get("artifact", "")
         return (job["status"] == "completed" and len(invoked) == 1
                 and invoked[0]["raw"]["host"] == "127.0.0.1"
