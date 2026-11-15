@@ -158,7 +158,17 @@ Manage your devices, Permissions (capability grants per agent).
   <job_id>`; transcripts stay complete after a restart by falling
   back to the persisted artifact in Documents.
 
-## v0.13 — fleet
+## v0.13 — agents get file tooling (shipped)
+
+- fs grants were inert for agent runs; they are real now. An agent
+  granted fs.read / fs.list acts on "fs read: <path>" /
+  "fs list: <path>" lines in the objective: gated before any disk
+  I/O, attested as tool.invoked, content pulled into its context,
+  failures fail soft. Combined with net.fetch and agent.spawn, one
+  chat message can now fetch a page, read a file and delegate —
+  all in one governed run.
+
+## v0.14 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
