@@ -45,8 +45,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if a.agent_cmd == "create":
                 tools = [t.strip() for t in a.tools.split(",") if t.strip()]
-                agent = kernel.agents.create(a.name, a.instructions,
-                                             model=a.model, tools=tools)
+                agent = kernel.agents.create(
+                    a.name, a.instructions, model=a.model, tools=tools,
+                    extra_tools=kernel.connectors.tool_names())
                 print(json.dumps(agent, indent=2))
             elif a.agent_cmd == "list":
                 for ag in kernel.agents.list():

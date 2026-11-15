@@ -63,7 +63,8 @@ class AgentRegistry:
     def create(self, name: str, instructions: str,
                model: str | None = None,
                tools: list[str] | None = None,
-               avatar: dict[str, str] | None = None) -> dict[str, Any]:
+               avatar: dict[str, str] | None = None,
+               extra_tools: list[str] | None = None) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise AgentError("agent name is required")
         name = name.strip()
@@ -76,8 +77,9 @@ class AgentRegistry:
             raise AgentError(
                 f"instructions too long (max {MAX_INSTRUCTIONS} chars)")
         grants = []
+        catalog = TOOLS + list(extra_tools or [])
         for t in tools or []:
-            if t not in TOOLS:
+            if t not in catalog:
                 raise AgentError(f"unknown tool: {t}")
             if t not in grants:
                 grants.append(t)
