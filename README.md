@@ -148,3 +148,41 @@ unknown, never as zero tool use. This runner cannot edit OS code itself or
 automatically promote model-suggested changes; review reproducible findings
 and apply vetted changes through the repository and CI.
 
+
+
+### Native parallel fleet and connector-enabled named agents
+
+For a governed **parallel fleet** of four named agents instead of four
+independently started jobs, run Crow OS and Ollama on the same computer
+then invoke:
+
+    python3 scripts/edge_mission.py --fleet --enable-network \
+      --rounds 3 --deadline 600 \
+      --evidence crow-os-parallel-fleet.json
+
+Every round submits a single parent through /api/fleet; Crow OS dispatches
+four child agents in parallel and records each membership in its ledger.
+The client reports members from the parent's actual job details. It checks
+Crow OS's Ollama/ledger status before submission and checkpoints confirmed
+job IDs and observed results atomically, with private file permissions.
+
+To create your own named agent with its own custom instructions and a
+read-only GitHub repository-listing grant:
+
+    crow agent create --name "Repo Auditor" \
+      --instructions "Only summarize verified repository data." \
+      --tools github.repos
+
+Then, with a GitHub connector token configured by the operator through
+CROW_OS_GITHUB_TOKEN or the permission-restricted Crow OS secrets directory:
+
+    crow run --agent repo-auditor \
+      --objective $'connector: github.repos\nSummarize the returned repositories.'
+
+Connector requests execute only for explicit operator objective lines,
+only when that agent's TOOL capability permits them, and at most twice
+per job. Connector results are **untrusted input** to the model; they do
+not authorize shell access, file changes, code pushes, merges or completed
+workflow steps. The mission runner itself never writes code into a running
+Crow OS instance. Full Python 3.11/3.12 CI and a real local Ollama
+smoke run remain required before promoting this integration.
