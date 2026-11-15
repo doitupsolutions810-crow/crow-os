@@ -17,6 +17,7 @@ from .capabilities import Broker, CapabilityError
 from .ledger import Ledger
 from .llm import LLMUnavailable, OllamaClient
 from .tools import ToolError, ToolRunner
+from .connector_tooling import connector_context
 from .workflow import Workflow
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
@@ -134,7 +135,7 @@ class AgentWorker:
 
     def __init__(self, broker: Broker, workflow: Workflow, ledger: Ledger,
                  client: OllamaClient, tools: ToolRunner | None = None,
-                 spawner=None, file_tools=None):
+                 spawner=None, file_tools=None, connector_runner=None):
         self.broker = broker
         self.workflow = workflow
         self.ledger = ledger
@@ -142,6 +143,7 @@ class AgentWorker:
         self.tools = tools
         self.spawner = spawner  # callable(parent_job_id, agent_id, objective) -> job
         self.file_tools = file_tools
+        self.connector_runner = connector_runner
 
     def run(self, objective: str, agent: dict[str, Any], cap: dict[str, Any],
             outputs: dict | None = None,
@@ -200,6 +202,9 @@ class AgentWorker:
                         context += f"\n(fs {op} {vpath} failed: {e})\n"
             if outputs is not None:
                 outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
+            context += connector_context(
+                objective, agent.get("tools") or [], self.broker, cap,
+                self.connector_runner, self.ledger, job_id)
             memory_block = (f"\nYour memory from earlier runs:\n"
                             f"{memory[-2000:]}\n") if memory else ""
             reply = self.client.chat_stream(
@@ -220,6 +225,7 @@ class AgentWorker:
             # agent.spawned and enforces the depth cap).
             if self.spawner is not None and \
                     "agent.spawn" in (agent.get("tools") or []):
+                role = "governance"
                 subs = []
                 for line in objective.splitlines():
                     m = _DELEGATE_RE.match(line.strip())
@@ -228,6 +234,7 @@ class AgentWorker:
                         # role, depth cap) must not kill the parent
                         # job: record the refusal and carry on to
                         # governance.
+                        self.broker.authorize(cap, "TOOL", "agent.spawn")
                         try:
                             child = self.spawner(job_id, m.group(1),
                                                  m.group(2).strip())

@@ -22,6 +22,7 @@ from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
+MAX_BODY_BYTES = 65_536
 
 
 class HomeServer:
@@ -117,6 +118,23 @@ class HomeServer:
 
 def make_handler(home: HomeServer):
     class Handler(BaseHTTPRequestHandler):
+        def _payload(self) -> dict[str, Any]:
+            """Bound JSON POST bodies for agent, fleet, peer and routine routes."""
+            raw = self.headers.get("Content-Length")
+            try:
+                length = int(raw) if raw is not None else 0
+            except (ValueError, TypeError) as exc:
+                raise ValueError("invalid Content-Length") from exc
+            if not 0 < length <= MAX_BODY_BYTES:
+                raise ValueError("JSON body must be 1..65536 bytes")
+            try:
+                value = json.loads(self.rfile.read(length))
+            except (ValueError, UnicodeError) as exc:
+                raise ValueError("body must be JSON") from exc
+            if not isinstance(value, dict):
+                raise ValueError("body must be a JSON object")
+            return value
+
         def _json(self, code: int, obj: Any) -> None:
             body = json.dumps(obj).encode()
             self.send_response(code)
@@ -255,13 +273,13 @@ def make_handler(home: HomeServer):
             if u.path == "/api/agents":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     agent = home.kernel.agents.create(
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
                         tools=payload.get("tools"),
-                        avatar=payload.get("avatar"))
+                        avatar=payload.get("avatar"),
+                        extra_tools=home.kernel.connectors.tool_names())
                 except (ValueError, json.JSONDecodeError):
                     return self._json(400, {"error": "body must be JSON"})
                 except AgentError as e:
@@ -271,8 +289,7 @@ def make_handler(home: HomeServer):
                 from .routines import RoutineError
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     if u.path == "/api/routines":
                         routine = home.kernel.create_routine(
                             payload.get("name"), payload.get("agent"),
@@ -292,8 +309,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/fleet":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     objective = payload.get("objective")
                     agents = payload.get("agents")
                     if not isinstance(objective, str) or not objective.strip():
@@ -318,8 +334,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/peers":
                 from .federation import FederationError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     peer = home.kernel.peers.register(
                         payload.get("name"), payload.get("url"),
                         payload.get("pubkey"))
@@ -331,8 +346,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/federation/dispatch":
                 from .federation import FederationError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     reply = home.kernel.federation_dispatch(
                         payload.get("peer"), payload.get("agent"),
                         payload.get("objective"))
@@ -345,8 +359,7 @@ def make_handler(home: HomeServer):
                 from .federation import FederationError, verify_incoming
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     peer = verify_incoming(home.kernel.peers, payload)
                     result = home.kernel.federation_receive(
                         peer["name"], payload["agent"], payload["objective"])
@@ -360,8 +373,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/plugins":
                 from .plugins import PluginError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     home.kernel.plugins.set_asserted(
                         payload.get("id"), bool(payload.get("connected")))
                 except (ValueError, json.JSONDecodeError):
@@ -372,8 +384,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/devices":
                 from .devices import DeviceError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     device = home.kernel.devices.register(
                         payload.get("name"), payload.get("kind", "device"),
                         payload.get("address", ""))
@@ -385,8 +396,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/spawn":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._payload()
                     agent_id = payload.get("agent")
                     objective = payload.get("objective")
                     parent = payload.get("parent")
@@ -412,8 +422,7 @@ def make_handler(home: HomeServer):
             if u.path != "/api/run":
                 return self._json(404, {"error": "not found"})
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._payload()
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "body must be JSON"})
             objective = payload.get("objective")

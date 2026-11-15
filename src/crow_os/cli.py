@@ -20,6 +20,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--ollama", default=None, help="Ollama base URL")
     r.add_argument("--agent", default=None, help="run a user-created agent by id")
     sub.add_parser("verify")
+    o = sub.add_parser("ollama-check", help="verify the local Ollama endpoint and installed model")
+    o.add_argument("--model", default=None)
+    o.add_argument("--base-url", "--ollama", dest="base_url", default=None)
+    o.add_argument("--smoke", action="store_true", help="send one short chat request")
+    ai = sub.add_parser("avrone-import", help="ingest one local AVRONE bridge journal as untrusted evidence")
+    ai.add_argument("--path", required=True, help="path to an AVRONE bridge/<run-id>.jsonl file")
     f_ = sub.add_parser("fs", help="the OS file system (operator view)")
     fsub = f_.add_subparsers(dest="fs_cmd", required=True)
     x = fsub.add_parser("ls"); x.add_argument("path", nargs="?", default="/")
@@ -39,15 +45,48 @@ def main(argv: list[str] | None = None) -> int:
     t_.add_argument("job_id")
     a = p.parse_args(argv)
     home = Path(a.home)
+    if a.cmd == "ollama-check":
+        from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
+        try:
+            client = OllamaClient(base_url=a.base_url or DEFAULT_BASE,
+                                  model=a.model or DEFAULT_MODEL)
+            health = client.health()
+            result = {"reachable": True, "base": client.base_url,
+                      "model": client.model, "model_present": health["model_present"],
+                      "installed": health["models"]}
+            if not health["model_present"]:
+                print(json.dumps(result, indent=2))
+                return 3  # model not installed; no implicit pulls
+            if a.smoke:
+                answer = client.chat_stream(
+                    "You are a connection diagnostic. Respond with READY.",
+                    "Reply READY.")
+                result["smoke_ok"] = bool(answer.strip())
+                result["smoke_response_chars"] = len(answer)
+            print(json.dumps(result, indent=2))
+            return 0
+        except (ValueError, LLMUnavailable) as e:
+            print(json.dumps({"reachable": False, "error": str(e)}))
+            return 2
+    if a.cmd == "avrone-import":
+        from .avrone import AvroneImportError, import_avrone_journal
+        try:
+            kernel = Kernel(home)
+            outcome = import_avrone_journal(kernel, a.path)
+            print(json.dumps(outcome, indent=2))
+            return 0 if outcome["ledger_ok"] else 1
+        except (AvroneImportError, OSError) as e:
+            print(json.dumps({"error": str(e)}))
+            return 1
     if a.cmd == "agent":
         from .agents import AgentError
         kernel = Kernel(home)
         try:
             if a.agent_cmd == "create":
                 tools = [t.strip() for t in a.tools.split(",") if t.strip()]
-                agent = kernel.agents.create(
-                    a.name, a.instructions, model=a.model, tools=tools,
-                    extra_tools=kernel.connectors.tool_names())
+                agent = kernel.agents.create(a.name, a.instructions,
+                                             model=a.model, tools=tools,
+                                             extra_tools=kernel.connectors.tool_names())
                 print(json.dumps(agent, indent=2))
             elif a.agent_cmd == "list":
                 for ag in kernel.agents.list():

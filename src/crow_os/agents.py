@@ -21,13 +21,22 @@ Rules that keep this safe inside the OS's discipline:
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import math
+import os
 import re
+import stat
 import time
 from typing import Any
 
 from .fs import CrowFS, FSError
 from .tools import TOOLS
+from .connectors import CONNECTOR_TOOLS
+
+TRUSTED_CONNECTOR_TOOLS = frozenset(
+    t for group in CONNECTOR_TOOLS.values() for t in group)
 
 AGENTS_DIR = "/system/agents"
 MAX_NAME = 60
@@ -55,6 +64,51 @@ def _slugify(name: str) -> str:
     return slug or "agent"
 
 
+ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z", re.ASCII)
+
+
+def _clean_text(value: str, field: str, limit: int, *, multiline: bool = False) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise AgentError(f"{field} is required")
+    value = value.strip()
+    if len(value) > limit:
+        raise AgentError(f"{field} too long (max {limit} chars)")
+    if any((ord(ch) < 32 and (not multiline or ch not in "\n\t\r")) or
+           ord(ch) == 127 for ch in value):
+        raise AgentError(f"{field} contains a control character")
+    try:
+        value.encode("utf-8")
+    except UnicodeError as e:
+        raise AgentError(f"{field} contains invalid Unicode") from e
+    return value
+
+
+@contextlib.contextmanager
+def _creation_lock(fs: CrowFS):
+    """Keep duplicate agent names distinct across threads and processes."""
+    try:
+        target = fs.resolve(f"{AGENTS_DIR}/.create.lock")
+        fd = os.open(target, os.O_RDWR | os.O_CREAT |
+                     getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "a+b") as stream:
+            st = os.fstat(stream.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+                raise AgentError("unsafe agent creation lock")
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    except (OSError, FSError) as e:
+        raise AgentError("agent creation lock unavailable") from e
+
+
+def _safe_id(agent_id: str) -> str:
+    if not isinstance(agent_id, str) or len(agent_id) > 120 or not ID_RE.fullmatch(agent_id):
+        raise AgentError("invalid agent ID")
+    return agent_id
+
+
 class AgentRegistry:
     def __init__(self, fs: CrowFS):
         self.fs = fs
@@ -65,55 +119,87 @@ class AgentRegistry:
                tools: list[str] | None = None,
                avatar: dict[str, str] | None = None,
                extra_tools: list[str] | None = None) -> dict[str, Any]:
-        if not isinstance(name, str) or not name.strip():
-            raise AgentError("agent name is required")
-        name = name.strip()
-        if len(name) > MAX_NAME:
-            raise AgentError(f"name too long (max {MAX_NAME} chars)")
-        if not isinstance(instructions, str) or not instructions.strip():
-            raise AgentError("custom instructions are required")
-        instructions = instructions.strip()
-        if len(instructions) > MAX_INSTRUCTIONS:
-            raise AgentError(
-                f"instructions too long (max {MAX_INSTRUCTIONS} chars)")
+        name = _clean_text(name, "agent name", MAX_NAME)
+        instructions = _clean_text(
+            instructions, "custom instructions", MAX_INSTRUCTIONS, multiline=True)
+        if model is not None:
+            if not isinstance(model, str):
+                raise AgentError("model must be a string")
+            model = _clean_text(model, "model", 200) if model.strip() else None
+            if model is not None and any(ch.isspace() for ch in model):
+                raise AgentError("model name cannot contain whitespace")
+        if tools is None:
+            tools = []
+        if not isinstance(tools, (list, tuple)):
+            raise AgentError("tools must be a list of approved tool names")
+        if extra_tools is None:
+            extra_tools = []
+        if (not isinstance(extra_tools, (list, tuple)) or
+                any(not isinstance(t, str) or t not in TRUSTED_CONNECTOR_TOOLS
+                    for t in extra_tools)):
+            raise AgentError("invalid approved connector tool list")
+        catalog = set(TOOLS).union(extra_tools)
         grants = []
-        catalog = TOOLS + list(extra_tools or [])
-        for t in tools or []:
-            if t not in catalog:
-                raise AgentError(f"unknown tool: {t}")
+        for t in tools:
+            if not isinstance(t, str) or t not in catalog:
+                raise AgentError(f"unknown tool: {t!r}")
             if t not in grants:
                 grants.append(t)
-        base = _slugify(name)
-        if base in RESERVED:
-            raise AgentError(f"'{name}' collides with a built-in role")
-        agent_id, n = base, 2
-        while self.fs.exists(f"{AGENTS_DIR}/{agent_id}.json"):
-            agent_id = f"{base}-{n}"
-            n += 1
         look = dict(DEFAULT_AVATAR)
-        if avatar:
+        if avatar is not None:
+            if not isinstance(avatar, dict):
+                raise AgentError("avatar must be an object")
             if avatar.get("shape") is not None:
-                if avatar["shape"] not in AVATAR_SHAPES:
-                    raise AgentError(f"unknown avatar shape {avatar['shape']!r}")
+                if not isinstance(avatar["shape"], str) or avatar["shape"] not in AVATAR_SHAPES:
+                    raise AgentError("unknown avatar shape")
                 look["shape"] = avatar["shape"]
             if avatar.get("color") is not None:
-                if avatar["color"] not in AVATAR_COLORS:
-                    raise AgentError(f"unknown avatar color {avatar['color']!r}")
+                if not isinstance(avatar["color"], str) or avatar["color"] not in AVATAR_COLORS:
+                    raise AgentError("unknown avatar color")
                 look["color"] = avatar["color"]
-        agent = {"id": agent_id, "name": name, "instructions": instructions,
-                 "model": model or None, "tools": grants, "avatar": look,
-                 "created": time.time()}
-        self.fs.write_file(f"{AGENTS_DIR}/{agent_id}.json",
-                           json.dumps(agent, indent=2))
+        base = _slugify(name)
+        if base in RESERVED:
+            raise AgentError(f"{name!r} collides with a built-in role")
+        with _creation_lock(self.fs):
+            agent_id, n = base, 2
+            while self.fs.exists(f"{AGENTS_DIR}/{agent_id}.json"):
+                agent_id = f"{base}-{n}"
+                n += 1
+            agent = {"id": agent_id, "name": name, "instructions": instructions,
+                     "model": model, "tools": grants, "avatar": look,
+                     "created": time.time()}
+            self.fs.write_file(f"{AGENTS_DIR}/{agent_id}.json",
+                               json.dumps(agent, indent=2))
         return agent
 
     def get(self, agent_id: str) -> dict[str, Any]:
+        agent_id = _safe_id(agent_id)
         try:
-            return json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
-        except FSError:
-            raise AgentError(f"unknown agent: {agent_id}") from None
-        except json.JSONDecodeError:
-            raise AgentError(f"corrupt agent definition: {agent_id}") from None
+            agent = json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
+        except (FSError, ValueError, UnicodeError) as e:
+            raise AgentError(f"invalid or missing agent: {agent_id}") from e
+        if (not isinstance(agent, dict) or agent.get("id") != agent_id or
+                not isinstance(agent.get("name"), str) or
+                not isinstance(agent.get("instructions"), str)):
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        # Legacy Crow OS agents created before the avatar schema sometimes
+        # lack these optional fields; retain them with least-privilege defaults.
+        agent.setdefault("created", 0.0)
+        agent.setdefault("tools", [])
+        created = agent["created"]
+        if (type(created) not in (int, float) or
+                not 0 <= created <= 10_000_000_000_000 or
+                (type(created) is float and not math.isfinite(created)) or
+                not isinstance(agent.get("tools"), list) or
+                any(not isinstance(t, str) or
+                    (t not in TOOLS and t not in TRUSTED_CONNECTOR_TOOLS)
+                    for t in agent["tools"]) or
+                (agent.get("model") is not None and
+                 (not isinstance(agent["model"], str) or
+                  any(ch.isspace() for ch in agent["model"])))):
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        agent.setdefault("avatar", dict(DEFAULT_AVATAR))
+        return agent
 
     def list(self) -> list[dict[str, Any]]:
         out = []
@@ -126,7 +212,11 @@ class AgentRegistry:
         return sorted(out, key=lambda a: a["created"])
 
     def delete(self, agent_id: str) -> None:
-        real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
+        agent_id = _safe_id(agent_id)
+        try:
+            real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
+        except FSError as e:
+            raise AgentError(f"invalid agent ID: {agent_id}") from e
         if not real.exists():
             raise AgentError(f"unknown agent: {agent_id}")
         real.unlink()

@@ -19,6 +19,7 @@ from .agents import AgentRegistry
 from .capabilities import Broker
 from .devices import DeviceRegistry
 from .plugins import PluginRegistry
+from .connectors import ConnectorRegistry
 from .routines import RoutineStore
 from .federation import (FederationError, Identity, PeerStore,
                          signed_dispatch, _slug as _slug_name)
@@ -54,6 +55,7 @@ class Kernel:
         self.agents = AgentRegistry(self.fs)  # user-created agents
         self.devices = DeviceRegistry(self.fs)  # hosting devices
         self.plugins = PluginRegistry(self.fs)  # connect-apps catalog
+        self.connectors = ConnectorRegistry(self.fs, self.home)
         self.routines = RoutineStore(self.fs)  # scheduled agent runs
         self.peers = PeerStore(self.fs)  # federation peer registry
         self._identity: Identity | None = None
@@ -173,7 +175,8 @@ class Kernel:
                                      for t in agent.get("tools") or []) else None
         worker = AgentWorker(self.broker, self.workflow, self.ledger,
                              client, tools=tools, spawner=spawner,
-                             file_tools=file_tools)
+                             file_tools=file_tools,
+                             connector_runner=self.connectors if tools_enabled else None)
         if job_id is None:
             job_id = self.workflow.create_job(
                 objective, chain=[agent_id, "governance"])
