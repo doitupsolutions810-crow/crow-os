@@ -3,337 +3,378 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crow OS — Home</title>
+<title>Crow OS</title>
 <style>
-  :root{--bg:#0b0e14;--panel:#11151f;--panel2:#161b28;--line:#232a3d;--txt:#e6e9f2;--dim:#8b93a7;--acc:#7c5cff;--acc2:#2dd4a7;--warn:#ffb454;--bad:#ff6b6b;--chip:#1d2436}
+  :root{--bg:#0a0a0b;--side:#101012;--panel:#17171a;--panel2:#1e1e22;--line:#26262b;--txt:#ececf1;--dim:#9b9ba4;--acc:#fff;--ok:#3fb68b;--bad:#e5534b;--warn:#d29922;--radius:16px}
   *{box-sizing:border-box} html,body{height:100%}
-  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column}
-  /* ── menu bar ─────────────────────────── */
-  header{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
-  .logo{font-size:18px;font-weight:700;letter-spacing:.3px}.logo span{color:var(--acc)}
-  nav{display:flex;gap:6px}
-  nav button{background:transparent;border:1px solid transparent;color:var(--dim);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px}
-  nav button.on{color:var(--txt);background:var(--chip);border-color:var(--line)}
-  #search{flex:1;min-width:160px;max-width:420px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--txt);padding:7px 12px;outline:none}
-  .pill{font-size:12px;padding:4px 10px;border-radius:99px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
-  .pill b{color:var(--acc2)} .pill.demo b{color:var(--warn)}
-  /* ── sandbox bar ──────────────────────── */
-  #sandbox{display:flex;gap:18px;flex-wrap:wrap;padding:7px 16px;background:var(--panel2);border-bottom:1px solid var(--line);font-size:12px;color:var(--dim)}
-  #sandbox b{color:var(--txt);font-weight:600}
-  /* ── layout ───────────────────────────── */
-  main{flex:1;display:flex;min-height:0}
-  #ops{width:270px;flex:none;border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column}
-  #ops h3{margin:12px 14px 6px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
-  #opslist{overflow-y:auto;padding:0 8px 12px}
-  .op{padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 2px;cursor:pointer;background:var(--panel2)}
-  .op:hover{border-color:var(--acc)} .op.sel{border-color:var(--acc)}
-  .op .t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .op .s{font-size:11px;color:var(--dim);margin-top:2px}
-  .chip{display:inline-block;font-size:10px;padding:1px 7px;border-radius:99px;margin-left:6px;vertical-align:1px}
-  .chip.running{background:#2a2350;color:#b7a8ff}.chip.completed{background:#0f352a;color:var(--acc2)}
-  .chip.failed{background:#3d1a1a;color:var(--bad)}.chip.queued{background:var(--chip);color:var(--dim)}
-  .steps-mini{font-size:11px;color:var(--dim);margin-top:4px}
-  #stage{flex:1;display:flex;flex-direction:column;min-width:0}
-  .view{flex:1;overflow-y:auto;padding:18px;display:none}
-  .view.on{display:block}
-  /* ── chat ─────────────────────────────── */
-  #chatview{display:none;flex-direction:column;padding:0}
-  #chatview.on{display:flex}
-  #msgs{flex:1;overflow-y:auto;padding:18px;max-width:860px;width:100%;margin:0 auto}
-  .msg{margin:10px 0;display:flex;gap:10px}
-  .msg .who{flex:none;width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;background:var(--chip)}
-  .msg.user .who{background:var(--acc)}
-  .bubble{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 14px;max-width:92%}
-  .msg.user .bubble{background:#1d1836}
-  /* thinking card — the vibe-code dropdown */
-  .think{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin:10px 0;max-width:860px}
-  .think>button{all:unset;display:flex;width:100%;align-items:center;gap:10px;padding:11px 14px;cursor:pointer}
-  .think .car{transition:transform .2s;color:var(--dim)} .think.open .car{transform:rotate(90deg)}
-  .think .ttl{font-weight:600;font-size:13px}
-  .think .sub{color:var(--dim);font-size:12px;margin-left:auto}
-  .think .body{display:none;border-top:1px solid var(--line);padding:10px 14px}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex}
+  /* ── left rail: chats ── */
+  #rail{width:272px;flex:none;background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 12px;gap:10px}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:700;font-size:17px;padding:2px 6px}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--ok)}
+  .brand .dot.off{background:var(--bad)}
+  #search{background:var(--panel);border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:8px 12px;outline:none;width:100%}
+  #newchat{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:9px;cursor:pointer;font-weight:600}
+  #newchat:hover{border-color:#3a3a41}
+  #rail h4{margin:8px 6px 2px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+  #chats{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+  .chat{padding:8px 10px;border-radius:10px;cursor:pointer;color:var(--dim)}
+  .chat:hover{background:var(--panel)} .chat.sel{background:var(--panel2);color:var(--txt)}
+  .chat .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px}
+  .chat .s{font-size:11px;margin-top:1px}
+  .chip{display:inline-block;font-size:10px;padding:0 6px;border-radius:99px;border:1px solid var(--line)}
+  .chip.running{color:#b7a8ff}.chip.completed{color:var(--ok)}.chip.failed{color:var(--bad)}
+  #railfoot{border-top:1px solid var(--line);padding-top:10px;font-size:12px;color:var(--dim)}
+  #railfoot b{color:var(--txt)}
+  /* ── main column ── */
+  #main{flex:1;display:flex;flex-direction:column;min-width:0}
+  #topbar{display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--dim);flex-wrap:wrap}
+  #topbar b{color:var(--txt)}
+  #buildbtn{margin-left:auto;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:9px;padding:6px 12px;cursor:pointer}
+  #msgs{flex:1;overflow-y:auto;padding:26px 18px}
+  .col{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  .hello{text-align:center;margin:9vh 0 4vh}
+  .hello h1{font-size:30px;margin:0 0 6px}
+  .hello p{color:var(--dim);margin:0}
+  .msg{display:flex;gap:11px}
+  .msg .who{flex:none;width:30px;height:30px;border-radius:50%;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:14px}
+  .msg.user{justify-content:flex-end}
+  .msg.user .bubble{background:#232329;border-radius:18px;padding:10px 16px;max-width:85%}
+  .bubble{padding-top:3px;max-width:100%}
+  /* thinking card — Grok-style collapsible */
+  .think{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);overflow:hidden}
+  .think>button{all:unset;display:flex;width:100%;align-items:center;gap:10px;padding:12px 15px;cursor:pointer}
+  .think .car{color:var(--dim);transition:transform .2s}.think.open .car{transform:rotate(90deg)}
+  .think .ttl{font-weight:600;font-size:13.5px}
+  .think .sub{margin-left:auto;color:var(--dim);font-size:12px}
+  .dots i{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--dim);margin-left:3px;animation:bl 1.2s infinite}
+  .dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+  @keyframes bl{50%{opacity:.25}}
+  .think .body{display:none;border-top:1px solid var(--line);padding:10px 15px}
   .think.open .body{display:block}
-  .step{display:flex;gap:10px;padding:6px 0;align-items:flex-start}
-  .step .ic{flex:none;width:20px;text-align:center}
-  .step .role{font-weight:600;font-size:13px;min-width:86px}
-  .step .note{color:var(--dim);font-size:12.5px;word-break:break-word}
-  .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:sp 0.8s linear infinite;vertical-align:-2px}
-  @keyframes sp{to{transform:rotate(360deg)}}
-  .pulse{animation:pl 1.2s ease-in-out infinite}@keyframes pl{50%{opacity:.45}}
-  #composer{display:flex;gap:10px;padding:12px 16px;border-top:1px solid var(--line);background:var(--panel)}
-  #objective{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:10px 14px;outline:none}
-  #runbtn{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:10px 20px;font-weight:600;cursor:pointer}
-  #modebtn{background:var(--chip);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer}
-  pre{background:#0d1017;border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
+  .step{display:flex;gap:10px;padding:5px 0;align-items:flex-start}
+  .step .role{font-weight:600;font-size:13px;min-width:88px}
+  .step .note{color:var(--dim);font-size:13px;word-break:break-word}
+  .step .st{margin-left:auto}
+  .livebox{margin:6px 0 2px;background:#0d0d10;border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:12.5px;color:#c9c9d1;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow-y:auto}
+  .livebox:empty{display:none}
+  /* composer — Grok-style */
+  #composerwrap{padding:10px 18px 18px}
+  #composer{max-width:780px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:10px 12px 8px}
+  #objective{width:100%;background:transparent;border:0;outline:none;color:var(--txt);font-size:15px;resize:none;min-height:26px}
+  .crow{display:flex;align-items:center;gap:8px;margin-top:6px}
+  #modelsel{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:99px;padding:5px 10px;font-size:12.5px;max-width:300px}
+  .hint{color:var(--dim);font-size:11.5px}
+  #send{margin-left:auto;width:36px;height:36px;border-radius:50%;border:0;background:var(--acc);color:#000;font-size:16px;cursor:pointer}
+  #send:disabled{opacity:.4;cursor:default}
+  /* ── build panel (slide-over) ── */
+  #build{position:fixed;top:0;right:0;bottom:0;width:460px;max-width:94vw;background:var(--side);border-left:1px solid var(--line);transform:translateX(105%);transition:transform .25s;display:flex;flex-direction:column;z-index:5}
+  #build.open{transform:none}
+  #build header{display:flex;gap:6px;padding:12px;border-bottom:1px solid var(--line);align-items:center}
+  #build header button{background:transparent;border:1px solid transparent;color:var(--dim);padding:6px 11px;border-radius:8px;cursor:pointer}
+  #build header button.on{color:var(--txt);background:var(--panel2);border-color:var(--line)}
+  #build .view{flex:1;overflow-y:auto;padding:14px;display:none}
+  #build .view.on{display:block}
+  pre{background:#0d0d10;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
   table{border-collapse:collapse;width:100%;font-size:12.5px}
-  td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
-  th{color:var(--dim);font-weight:600}
-  .empty{color:var(--dim);padding:24px;text-align:center}
-  @media(max-width:820px){#ops{display:none}}
+  td,th{border-bottom:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:top}
+  th{color:var(--dim)}
+  .empty{color:var(--dim);text-align:center;padding:20px}
+  @media(max-width:860px){#rail{display:none}}
 </style>
 </head>
 <body>
-<header>
-  <div class="logo">🐦‍⬛ Crow <span>OS</span></div>
-  <nav id="tabs">
-    <button data-view="chatview" class="on">💬 Chat</button>
-    <button data-view="sandboxview">🧪 Sandbox</button>
-    <button data-view="codeview">⌨️ Code</button>
+<aside id="rail">
+  <div class="brand"><span id="livedot" class="dot off"></span>🐦‍⬛ Crow OS</div>
+  <input id="search" type="search" placeholder="Search chats and operations">
+  <button id="newchat">＋ New chat</button>
+  <h4>Operations</h4>
+  <div id="chats"><div class="empty">No operations yet</div></div>
+  <div id="railfoot">🤖 <b id="footmodel">—</b><br><span id="footbase">Ollama: —</span></div>
+</aside>
+
+<section id="main">
+  <div id="topbar">
+    <div>📜 Ledger <b id="sb-entries">—</b></div>
+    <div>🔗 <b id="sb-verify">—</b></div>
+    <div>🏠 <b id="sb-home">—</b></div>
+    <div>⚙️ Kernel <b id="sb-ver">—</b></div>
+    <button id="buildbtn">🛠️ Build panel</button>
+  </div>
+  <div id="msgs"><div class="col" id="msgcol">
+    <div class="hello" id="hello">
+      <h1>How can the squad help?</h1>
+      <p>Governed agents on your OS-installed Ollama — every step capability-gated and written to the signed ledger.</p>
+    </div>
+  </div></div>
+  <div id="composerwrap">
+    <form id="composer">
+      <textarea id="objective" rows="1" placeholder="Message Crow OS…"></textarea>
+      <div class="crow">
+        <select id="modelsel"><option value="">Loading models…</option></select>
+        <span class="hint" id="modehint">backend: —</span>
+        <button id="send" type="submit" title="Run">↑</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<aside id="build">
+  <header>
+    <button data-view="codeview" class="on">⌨️ Code</button>
     <button data-view="appview">🖥️ App</button>
     <button data-view="ledgerview">📜 Ledger</button>
-  </nav>
-  <input id="search" type="search" placeholder="Search operations, chats, ledger…">
-  <div class="pill" id="modepill">connecting…</div>
-</header>
-<div id="sandbox">
-  <div>🏠 Home <b id="sb-home">—</b></div>
-  <div>📜 Ledger <b id="sb-entries">—</b> entries</div>
-  <div>🔗 Chain <b id="sb-verify">—</b></div>
-  <div>🛂 Capabilities <b id="sb-caps">gated</b></div>
-  <div>🤖 Model <b id="sb-model">—</b></div>
-  <div>⚙️ Kernel <b id="sb-ver">—</b></div>
-</div>
-<main>
-  <aside id="ops">
-    <h3>Operations in process</h3>
-    <div id="opslist"><div class="empty">No operations yet.<br>Ask the agents to build something.</div></div>
-  </aside>
-  <section id="stage">
-    <div class="view on" id="chatview">
-      <div id="msgs">
-        <div class="msg"><div class="who">🐦‍⬛</div><div class="bubble">Welcome to <b>Crow OS</b>. Give the squad an objective below — you can watch each agent think, step by step, in the expandable card: <b>debugger</b> plans, <b>coder</b> builds, <b>tester</b> checks the criteria, <b>governance</b> verifies the signed ledger before anything is allowed to complete.</div></div>
-      </div>
-      <form id="composer">
-        <input id="objective" placeholder="Objective for the squad… e.g. build a landing page for the audit report" autocomplete="off">
-        <button type="button" id="modebtn" title="Toggle run mode">Mode: Demo</button>
-        <button type="submit" id="runbtn">Run ▶</button>
-      </form>
-    </div>
-    <div class="view" id="sandboxview">
-      <h3>Sandbox</h3>
-      <pre id="sandboxdetail">—</pre>
-    </div>
-    <div class="view" id="codeview">
-      <h3>Code — selected operation</h3>
-      <div class="empty" id="codeempty">Run or select an operation to see its plan and artifact.</div>
-      <h4>Plan (debugger)</h4><pre id="codeplan">—</pre>
-      <h4>Artifact (coder)</h4><pre id="codeartifact">—</pre>
-    </div>
-    <div class="view" id="appview">
-      <h3>App preview — selected operation</h3>
-      <div id="appframe" class="bubble" style="max-width:100%">Nothing rendered yet.</div>
-    </div>
-    <div class="view" id="ledgerview">
-      <h3>Signed ledger — recent entries</h3>
-      <table><thead><tr><th>seq</th><th>kind</th><th>source</th><th>detail</th><th>sig</th></tr></thead><tbody id="ledgerbody"></tbody></table>
-    </div>
-  </section>
-</main>
+    <button data-view="sandboxview">🧪 Sandbox</button>
+    <button id="buildclose" style="margin-left:auto">✕</button>
+  </header>
+  <div class="view on" id="codeview">
+    <h4>Plan — debugger</h4><pre id="codeplan">Select an operation.</pre>
+    <h4>Artifact — coder</h4><pre id="codeartifact">—</pre>
+  </div>
+  <div class="view" id="appview"><h4>App preview</h4><pre id="appframe">Nothing rendered yet.</pre></div>
+  <div class="view" id="ledgerview">
+    <h4>Signed ledger — recent</h4>
+    <table><thead><tr><th>seq</th><th>kind</th><th>detail</th><th>sig</th></tr></thead><tbody id="ledgerbody"></tbody></table>
+  </div>
+  <div class="view" id="sandboxview"><h4>Sandbox</h4><pre id="sandboxdetail">—</pre></div>
+</aside>
+
 <script>
 "use strict";
 const $=s=>document.querySelector(s);
 const ROLES=["debugger","coder","tester","governance"];
 const ROLE_ICON={debugger:"🧭",coder:"🛠️",tester:"🧪",governance:"🛂"};
-let LIVE=false, runMode="demo", selectedJob=null;
-const jobs=new Map();   // job_id -> {job, entries, el, stepsEl, rendered}
+let LIVE=false, selectedJob=null, ollama={reachable:false,installed:[],active:""};
+const jobs=new Map();
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
-function esc(s){return String(s==null?"":s);}
+function scrollChat(){const m=$("#msgs");m.scrollTop=m.scrollHeight;}
 
-/* ── tabs ── */
-$("#tabs").addEventListener("click",e=>{
-  const b=e.target.closest("button"); if(!b)return;
-  document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
-  document.querySelectorAll(".view").forEach(v=>v.classList.toggle("on",v.id===b.dataset.view));
-  if(b.dataset.view==="ledgerview")refreshLedger();
-});
-
-/* ── status / sandbox bar ── */
+/* ── backend discovery ── */
 async function refreshStatus(){
   try{
-    const r=await fetch("/api/status"); if(!r.ok)throw 0;
-    const s=await r.json(); LIVE=true;
-    $("#modepill").innerHTML=""; $("#modepill").append("● LIVE — kernel connected");
-    $("#sb-home").textContent=s.home; $("#sb-entries").textContent=s.ledger.entries;
-    $("#sb-verify").textContent=s.ledger.ok?"✓ verified":"✗ BROKEN";
-    $("#sb-model").textContent=s.model; $("#sb-ver").textContent="v"+s.version;
+    const s=await (await fetch("/api/status")).json(); LIVE=true;
+    ollama=s.ollama||ollama;
+    $("#livedot").className="dot"+(ollama.reachable?"":" off");
+    $("#sb-entries").textContent=s.ledger.entries;
+    $("#sb-verify").textContent=s.ledger.ok?"chain ✓ verified":"chain ✗ BROKEN";
+    $("#sb-home").textContent=s.home; $("#sb-ver").textContent="v"+s.version;
     $("#sandboxdetail").textContent=JSON.stringify(s,null,2);
+    $("#footmodel").textContent=ollama.active||"—";
+    $("#footbase").textContent="Ollama: "+(ollama.reachable?ollama.base+" · "+ollama.installed.length+" model(s) installed":"not reachable — demo runtime");
+    buildModelOptions();
   }catch(_){
-    LIVE=false;
-    $("#modepill").className="pill demo"; $("#modepill").textContent="● DEMO FEED — run `crow serve` for the live kernel";
-    $("#sb-home").textContent="(browser demo)"; $("#sb-entries").textContent="—";
-    $("#sb-verify").textContent="simulated"; $("#sb-model").textContent="demo runtime";
-    $("#sb-ver").textContent="0.3.0"; $("#sandboxdetail").textContent="Demo feed: the pipeline below is simulated in your browser with the same roles, criteria and governance checks as the real kernel. Start `crow serve` from the crow-os repo and reload for live operations.";
+    LIVE=false; $("#livedot").className="dot off";
+    $("#footmodel").textContent="demo feed"; $("#footbase").textContent="Ollama: browser demo — run `crow serve` for the OS backend";
+    buildModelOptions();
+  }
+}
+function buildModelOptions(){
+  const sel=$("#modelsel"); sel.innerHTML="";
+  if(LIVE&&ollama.reachable){
+    for(const m of ollama.installed){
+      const o=el("option",null,"Ollama · "+m); o.value="llm:"+m; sel.append(o);
+    }
+    if(!ollama.installed.length){const o=el("option",null,"Ollama · "+ollama.active);o.value="llm:"+ollama.active;sel.append(o);}
+    const d=el("option",null,"Demo runtime"); d.value="demo"; sel.append(d);
+    $("#modehint").textContent="backend: OS Ollama @ "+ollama.base;
+  }else{
+    const o=el("option",null,LIVE?"Demo runtime (Ollama offline)":"Demo feed"); o.value="demo"; sel.append(o);
+    $("#modehint").textContent=LIVE?"backend: demo runtime":"backend: browser demo";
   }
 }
 
-/* ── operations index ── */
-function renderOps(){
+/* ── operations rail ── */
+function renderRail(){
   const q=$("#search").value.trim().toLowerCase();
-  const list=$("#opslist"); list.innerHTML="";
-  const arr=[...jobs.values()].reverse();
-  const shown=arr.filter(({job})=>!q||esc(job.objective).toLowerCase().includes(q)||job.job_id.includes(q));
-  if(!shown.length){list.append(el("div","empty","No operations match."));return;}
-  for(const rec of shown){
-    const {job}=rec;
-    const d=el("div","op"+(job.job_id===selectedJob?" sel":""));
-    const t=el("div","t",esc(job.objective));
-    const chip=el("span","chip "+job.status,job.status); t.append(chip);
-    d.append(t);
-    d.append(el("div","s","job "+job.job_id+" · step "+(job.step+1)+"/4"));
-    d.append(el("div","steps-mini",ROLES.map((r,i)=> (i<job.step?"✓ ":i===job.step&&job.status==="running"?"▸ ":"· ")+r).join("  ")));
-    d.addEventListener("click",()=>{selectJob(job.job_id);});
+  const list=$("#chats"); list.innerHTML="";
+  const arr=[...jobs.values()].reverse().filter(({job})=>!q||job.objective.toLowerCase().includes(q)||job.job_id.includes(q));
+  if(!arr.length){list.append(el("div","empty","No operations match"));return;}
+  for(const {job} of arr){
+    const d=el("div","chat"+(job.job_id===selectedJob?" sel":""));
+    const t=el("div","t",job.objective); d.append(t);
+    const s=el("div","s"); s.append(document.createTextNode("step "+(job.step+1)+"/4 · "));
+    s.append(el("span","chip "+job.status,job.status)); d.append(s);
+    d.addEventListener("click",()=>selectJob(job.job_id,true));
     list.append(d);
   }
 }
-function selectJob(id){
+$("#search").addEventListener("input",renderRail);
+function selectJob(id,openBuild){
   selectedJob=id; const rec=jobs.get(id); if(!rec)return;
   const out=rec.outputs||{};
-  $("#codeempty").style.display="none";
   $("#codeplan").textContent=out.plan||"(no plan captured)";
   $("#codeartifact").textContent=out.artifact||"(no artifact captured)";
-  const app=$("#appframe"); app.innerHTML="";
-  const h=el("h4",null,"Artifact preview — "+esc(rec.job.objective));
-  const p=el("pre",null,out.artifact||""); app.append(h,p);
-  renderOps();
+  $("#appframe").textContent=out.artifact||"Nothing rendered yet.";
+  renderRail();
+  if(openBuild)$("#build").classList.add("open");
 }
-$("#search").addEventListener("input",renderOps);
 
 /* ── chat rendering ── */
 function addUserMsg(text){
-  const m=el("div","msg user"); m.append(el("div","who","🧑"));
-  const b=el("div","bubble",text); m.append(b); $("#msgs").append(m); scrollChat();
+  $("#hello")?.remove();
+  const m=el("div","msg user"); m.append(el("div","bubble",text));
+  $("#msgcol").append(m); scrollChat();
 }
-function scrollChat(){const m=$("#msgs"); m.scrollTop=m.scrollHeight;}
 function addThinkCard(job){
   const card=el("div","think open");
   const head=el("button");
   head.append(el("span","car","▶"));
-  head.append(el("span","ttl","🐦‍⬛ Squad working — "+esc(job.objective)));
-  const sub=el("span","sub pulse","thinking…"); head.append(sub);
-  card.append(head);
+  head.append(el("span","ttl","🐦‍⬛ Squad — "+job.objective));
+  const sub=el("span","sub"); sub.innerHTML='thinking<span class="dots"><i></i><i></i><i></i></span>';
+  head.append(sub); card.append(head);
   const body=el("div","body"); card.append(body);
+  const live=el("div","livebox"); body.append(live);
   head.addEventListener("click",()=>card.classList.toggle("open"));
-  $("#msgs").append(card); scrollChat();
-  return {card,body,sub,stepRows:{}};
+  $("#msgcol").append(card); scrollChat();
+  return {card,body,sub,live,stepRows:{}};
 }
 function renderStep(rec,role,state,note){
   let row=rec.stepRows[role];
   if(!row){
     row=el("div","step");
-    row.append(el("span","ic",ROLE_ICON[role]));
+    row.append(el("span",null,ROLE_ICON[role]));
     row.append(el("span","role",role));
     row.note=el("span","note",""); row.append(row.note);
-    row.state=el("span","ic"); row.append(row.state);
-    rec.body.append(row); rec.stepRows[role]=row;
+    row.st=el("span","st"); row.append(row.st);
+    rec.body.insertBefore(row,rec.live); rec.stepRows[role]=row;
   }
-  row.state.innerHTML = state==="run" ? '<span class="spin"></span>' : state==="ok" ? "✅" : state==="bad" ? "❌" : "…";
-  if(note!=null) row.note.textContent=note;
+  row.st.textContent = state==="run"?"◌":state==="ok"?"✅":state==="bad"?"❌":"";
+  if(note!=null)row.note.textContent=note;
   scrollChat();
 }
-function finishCard(rec,job,answerText){
-  rec.sub.classList.remove("pulse");
-  rec.sub.textContent = job.status==="completed" ? "✓ completed" : "✗ failed";
+function finishCard(rec,job,text){
+  rec.sub.textContent = job.status==="completed"?"✓ completed":"✗ failed";
   const m=el("div","msg"); m.append(el("div","who","🐦‍⬛"));
-  m.append(el("div","bubble",answerText)); $("#msgs").append(m); scrollChat();
+  const b=el("div","bubble",text); m.append(b); $("#msgcol").append(m); scrollChat();
+}
+function applyEntry(rec,e){
+  if(e.kind==="job.created"){renderStep(rec,"debugger","run","planning the objective…");}
+  else{
+    const role=e.raw.role;
+    renderStep(rec,role,e.kind==="job.step"?"ok":"bad",e.raw.note||"");
+    const idx=ROLES.indexOf(role);
+    if(idx>=0&&idx<3&&rec.job.status==="running")renderStep(rec,ROLES[idx+1],"run","");
+  }
 }
 
-/* ── live mode: poll the kernel ── */
-async function runLive(objective){
-  const r=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({objective,mode:runMode})});
+/* ── live run: SSE first, polling fallback ── */
+async function runLive(objective,mode,model){
+  const r=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({objective,mode,model})});
   const data=await r.json(); if(!r.ok)throw new Error(data.error||"run failed");
-  let job=data.job;
-  if(!job){ // llm mode: the job appears in the ledger once the worker starts
-    for(let i=0;i<40&&!job;i++){
-      const jl=await (await fetch("/api/jobs")).json();
-      job=jl.jobs.filter(j=>j.objective===objective&&!jobs.has(j.job_id)).pop();
-      if(!job)await sleep(500);
-    }
-    if(!job)throw new Error("llm job did not appear");
-  }
+  const job=data.job;
   const rec={job,outputs:null,rendered:0,...addThinkCard(job)};
-  jobs.set(job.job_id,rec); renderOps();
-  // paced replay of the real event stream so each step is watchable
-  for(;;){
-    const jr=await fetch("/api/jobs/"+job.job_id); const jd=await jr.json();
-    rec.job=jd.job; rec.outputs=jd.outputs;
-    const evs=jd.entries.filter(e=>["job.created","job.step","job.failed"].includes(e.kind));
-    while(rec.rendered<evs.length){
-      const e=evs[rec.rendered++];
-      if(e.kind==="job.created"){renderStep(rec,"debugger","run","planning the objective…");}
-      else{
-        const role=e.raw.role;
-        renderStep(rec,role,e.kind==="job.step"?"ok":"bad",esc(e.raw.note||""));
-        const idx=ROLES.indexOf(role);
-        if(idx>=0&&idx<3&&jd.job.status==="running")renderStep(rec,ROLES[idx+1],"run","");
-      }
-      await sleep(650);
-    }
-    renderOps();
-    if(jd.job.status!=="running"){
-      selectJob(job.job_id);
+  jobs.set(job.job_id,rec); renderRail();
+  const done=new Promise(resolve=>{
+    let settled=false;
+    const finish=jd=>{if(settled)return;settled=true;
+      rec.job=jd.job; rec.outputs=jd.outputs; selectJob(job.job_id,false);
       finishCard(rec,jd.job, jd.job.status==="completed"
-        ? "Done. All four steps passed and governance verified the signed ledger ("+jd.entries.length+" entries for this run). Open the Code tab to see the plan and artifact."
-        : "The run failed closed: "+(jd.job.error||"a step reported failure")+". Nothing was marked complete — the ledger shows exactly where it stopped.");
-      refreshStatus(); refreshLedger();
-      return;
-    }
-    await sleep(500);
-  }
+        ? "Done. All four steps passed and governance verified the signed ledger. Open the Build panel for the plan and artifact."
+        : "The run failed closed: "+(jd.job.error||"a step reported failure")+". The ledger shows exactly where it stopped.");
+      refreshStatus(); refreshLedger(); resolve();};
+    // SSE stream
+    let es=null;
+    try{
+      es=new EventSource("/api/jobs/"+job.job_id+"/stream");
+      es.onmessage=ev=>{
+        const jd=JSON.parse(ev.data);
+        rec.job=jd.job; rec.outputs=jd.outputs;
+        if(jd.outputs&&jd.outputs.live)rec.live.textContent=jd.outputs.live;
+        const evs=jd.entries? [jd.entry].filter(Boolean):[];
+        // stream sends one entry per event in `entry`; detail entries arrive via poll below
+        if(jd.entry){applyEntry(rec,jd.entry); rec.rendered++;}
+        renderRail();
+        if(jd.job.status!=="running"){es.close(); finish(jd);}
+      };
+      es.onerror=()=>{/* fall through to polling */};
+    }catch(_){}
+    // polling (authoritative; also drives when SSE is unavailable)
+    (async()=>{ while(!settled){
+      try{
+        const jd=await (await fetch("/api/jobs/"+job.job_id)).json();
+        rec.job=jd.job; rec.outputs=jd.outputs;
+        if(jd.outputs&&jd.outputs.live)rec.live.textContent=jd.outputs.live;
+        const evs=jd.entries.filter(e=>["job.created","job.step","job.failed"].includes(e.kind));
+        while(rec.rendered<evs.length)applyEntry(rec,evs[rec.rendered++]);
+        renderRail();
+        if(jd.job.status!=="running"){try{es&&es.close();}catch(_){} finish(jd); break;}
+      }catch(_){}
+      await sleep(600);
+    }})();
+  });
+  await done;
 }
 
-/* ── demo mode: same pipeline, simulated in-browser ── */
+/* ── demo feed (no backend) ── */
 async function runDemo(objective){
   const id=Math.random().toString(16).slice(2,14);
   const job={job_id:id,objective,status:"running",step:0};
   const rec={job,outputs:null,rendered:0,...addThinkCard(job)};
-  jobs.set(id,rec); renderOps(); selectJob(id);
+  jobs.set(id,rec); renderRail();
   const plan={job:id,objective,criteria:["artifact references plan","artifact non-empty"]};
   const artifact="# artifact for "+objective+"\nplan:"+id+"\n";
-  rec.outputs={plan:JSON.stringify(plan,null,2),artifact};
+  rec.outputs={plan:JSON.stringify(plan,null,2),artifact,live:""};
   renderStep(rec,"debugger","run","planning the objective…"); await sleep(900);
-  renderStep(rec,"debugger","ok","plan ready · 2 criteria"); job.step=1; renderOps();
-  renderStep(rec,"coder","run","writing the artifact…"); await sleep(1100);
-  renderStep(rec,"coder","ok","artifact written · "+artifact.length+" chars"); job.step=2; renderOps(); selectJob(id);
-  renderStep(rec,"tester","run","checking criteria…"); await sleep(800);
-  renderStep(rec,"tester","ok","criteria 2/2"); job.step=3; renderOps();
-  renderStep(rec,"governance","run","verifying the signed ledger…"); await sleep(800);
+  renderStep(rec,"debugger","ok","plan ready · 2 criteria"); job.step=1; renderRail();
+  renderStep(rec,"coder","run","writing the artifact…");
+  for(const chunk of ["# artifact for "+objective+"\n","plan:"+id+"\n"]){rec.live.textContent+=chunk; await sleep(500);}
+  renderStep(rec,"coder","ok","artifact written"); job.step=2; renderRail(); selectJob(id,false);
+  renderStep(rec,"tester","run","checking criteria…"); await sleep(700);
+  renderStep(rec,"tester","ok","criteria 2/2"); job.step=3; renderRail();
+  renderStep(rec,"governance","run","verifying the signed ledger…"); await sleep(700);
   renderStep(rec,"governance","ok","ledger ok=true · signatures valid");
-  job.step=4; job.status="completed"; renderOps(); selectJob(id);
-  finishCard(rec,job,"Done (demo feed). All four steps passed and governance verified the ledger. Connect the live kernel with `crow serve` to run this against the real OS.");
+  job.step=4; job.status="completed"; renderRail(); selectJob(id,false);
+  finishCard(rec,job,"Done (demo feed). Connect the OS backend with `crow serve` and this same screen runs on your installed Ollama/Qwen Coder.");
 }
 
 /* ── ledger view ── */
 async function refreshLedger(){
   const tb=$("#ledgerbody"); tb.innerHTML="";
-  if(!LIVE){tb.append(el("tr",null,"")); tb.firstChild.append(el("td",null,"Demo feed — no live ledger. Start `crow serve`.")); return;}
+  if(!LIVE){const tr=el("tr");tr.append(el("td",null,"Demo feed — no live ledger."));tb.append(tr);return;}
   try{
-    const r=await fetch("/api/ledger?limit=30"); const d=await r.json();
+    const d=await (await fetch("/api/ledger?limit=30")).json();
     for(const e of d.entries.reverse()){
       const tr=el("tr");
-      tr.append(el("td",null,String(e.seq)));
-      tr.append(el("td",null,e.kind));
-      tr.append(el("td",null,e.source));
-      tr.append(el("td",null,esc((e.raw&&(e.raw.note||e.raw.objective||e.raw.role))||"")));
-      tr.append(el("td",null,e.sig?"🔏":"—"));
-      tb.append(tr);
+      tr.append(el("td",null,String(e.seq))); tr.append(el("td",null,e.kind));
+      tr.append(el("td",null,(e.raw&&(e.raw.note||e.raw.objective||e.raw.role))||""));
+      tr.append(el("td",null,e.sig?"🔏":"—")); tb.append(tr);
     }
   }catch(_){}
 }
 
+/* ── build panel ── */
+$("#buildbtn").addEventListener("click",()=>$("#build").classList.toggle("open"));
+$("#buildclose").addEventListener("click",()=>$("#build").classList.remove("open"));
+document.querySelectorAll("#build header button[data-view]").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll("#build header button").forEach(x=>x.classList.toggle("on",x===b));
+  document.querySelectorAll("#build .view").forEach(v=>v.classList.toggle("on",v.id===b.dataset.view));
+  if(b.dataset.view==="ledgerview")refreshLedger();
+}));
+$("#newchat").addEventListener("click",()=>{$("#objective").focus(); window.scrollTo(0,0);});
+
 /* ── composer ── */
-$("#modebtn").addEventListener("click",()=>{
-  runMode = runMode==="demo" ? "llm" : "demo";
-  $("#modebtn").textContent="Mode: "+(runMode==="demo"?"Demo":"LLM (Ollama)");
-});
 $("#composer").addEventListener("submit",async e=>{
   e.preventDefault();
   const objective=$("#objective").value.trim(); if(!objective)return;
   $("#objective").value=""; addUserMsg(objective);
-  try{ if(LIVE) await runLive(objective); else await runDemo(objective); }
-  catch(err){ const m=el("div","msg"); m.append(el("div","who","🐦‍⬛")); m.append(el("div","bubble","Run failed: "+err.message)); $("#msgs").append(m); }
+  const sel=$("#modelsel").value||"demo";
+  const [mode,model]= sel.startsWith("llm:") ? ["llm",sel.slice(4)] : ["demo",null];
+  try{ if(LIVE) await runLive(objective,mode,model); else await runDemo(objective); }
+  catch(err){ const m=el("div","msg"); m.append(el("div","who","🐦‍⬛")); m.append(el("div","bubble","Run failed: "+err.message)); $("#msgcol").append(m); }
 });
-refreshStatus().then(()=>{ if(LIVE){ fetch("/api/jobs").then(r=>r.json()).then(d=>{ for(const j of d.jobs){ if(!jobs.has(j.job_id)) jobs.set(j.job_id,{job:j,outputs:null,rendered:0}); } renderOps(); }); } refreshLedger(); });
+$("#objective").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault(); $("#composer").requestSubmit();} });
+
+refreshStatus().then(async ()=>{
+  if(LIVE){
+    try{ const d=await (await fetch("/api/jobs")).json();
+      for(const j of d.jobs) if(!jobs.has(j.job_id)) jobs.set(j.job_id,{job:j,outputs:null,rendered:0});
+      renderRail();
+    }catch(_){}
+  }
+  refreshLedger();
+});
 </script>
 </body>
 </html>
