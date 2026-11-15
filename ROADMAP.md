@@ -97,11 +97,27 @@ audit failure it prevents.
   select-to-talk), /api/agents (GET/POST/DELETE), `crow agent
   create|list`, `crow run --agent <id>`.
 
-## v0.9 — fleet
+## v0.9 — simplify: Chat + Agents are the surface (shipped)
+
+- Researched against the real thing: Grok's app (sidebar with new
+  chat + history, profile menu bottom-left, gear top-right, model
+  picker inside the message box, send button that appears once the
+  composer has content) and the Cursor SDK (@cursor/sdk: a durable
+  Agent holding model + settings across prompts; a Run per prompt
+  with a streamed event feed — the same shape as our agent registry
+  and ledger/SSE job stream; one contrast: headless Cursor agents
+  auto-approve tool calls, Crow OS keeps them capability-gated).
+- The Home Screen now shows only Chat and Agents by default. The
+  Build panel (Code/App/Ledger/Sandbox/Files), the system status
+  bar and backend details are hidden unless the user enables
+  "Developer panels" in Settings (⚙️, persisted in localStorage).
+  Nothing was removed — it all still runs on the backend.
+
+## v0.10 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
-## v0.10 — federation
+## v0.11 — federation
 - mTLS peer links (living-intermediate's verified design), digest-checked
   ingest — no unauthenticated peers
 
