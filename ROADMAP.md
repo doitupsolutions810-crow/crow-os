@@ -80,11 +80,28 @@ audit failure it prevents.
   system, one verifies the ledger), "Ask anything" composer with a
   ＋ button, and the model selector moved to the top bar.
 
-## v0.8 — fleet
+## v0.8 — custom agents (shipped)
+
+- Users create agents: a name, custom instructions (the agent's
+  system prompt), an optional model, and tool grants from the OS
+  catalog. Definitions live in the file system
+  (/system/agents/<id>.json), so agents persist across restarts and
+  are browsable in the Files tab.
+- Talking to an agent runs its own chain — [agent, governance] —
+  behind the capability gate: it receives EXECUTE only for itself
+  and TOOL rights only for its granted tools. Instructions are data
+  for the model, never authority; governance still verifies the
+  ledger last, and no chain may skip it (the workflow now carries a
+  per-job chain and enforces governance-last at creation).
+- Surfaces: Agents section in the Home Screen rail (create form +
+  select-to-talk), /api/agents (GET/POST/DELETE), `crow agent
+  create|list`, `crow run --agent <id>`.
+
+## v0.9 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
-## v0.9 — federation
+## v0.10 — federation
 - mTLS peer links (living-intermediate's verified design), digest-checked
   ingest — no unauthenticated peers
 
