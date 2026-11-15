@@ -85,3 +85,27 @@ are separate and need Python 3.11/3.12 hosted CI. No user Mac or installed
 Ollama model was accessed; no actual live chat jobs ran in the user's OS.
 
 Release decision remains HOLD.
+
+
+## Mission durability and observed-tool-use verification — 2026-11-15
+
+| Resource | Tested behavior | Evidence |
+| --- | --- | --- |
+| [Mission runner](../../scripts/edge_mission.py) | Preflight ledger integrity and local Ollama availability; bounded 1-5 rounds; atomic mode-0600 per-submission and per-poll checkpoints; halt on failure | Source updated on integration branch |
+| [Recovery HTTP tests](../../tests/test_edge_mission_recovery.py) | Eight cases, including failure on third submission while preserving two job IDs, missing Ollama, unverified ledger, multi-round completion, symlink-safe evidence and interrupted local API | New repository regression module |
+| [Observed ledger tooling tests](../../tests/test_edge_mission_ledger_evidence.py) | Three cases distinguish network grants from signed-ledger-reported use, preserve unknown status, and record worker failure messages | New repository regression module |
+| [Existing user agent creation tests](../../tests/test_named_agent_hardening.py) | Named agents with custom instructions, durable storage and concurrent name isolation | Existing code and tests retained |
+| [CI checks](https://github.com/doitupsolutions810-crow/crow-os/pull/1/checks) | Full unit and probe suite must run on the exact PR head | Pending / not certified |
+
+On isolated Python 3.13.5, the existing 20 tests plus 8 mission-recovery
+and 3 ledger-observation tests passed: **31/31 tests** in approximately
+10.1 seconds. The HTTP responses and job outcomes in these tests are
+scripted test doubles, **not live local-Ollama inferences**. The user's
+Crow OS endpoints at 127.0.0.1:8787 and Ollama at 127.0.0.1:11434
+were not reachable from the runtime used for testing; Desktop Commander
+returned no connected devices. No real network-capable Crow OS agent was
+started or monitored from the user's machine.
+
+The mission client only observes and reports existing network-tool events.
+It does not grant arbitrary shell access, patch the running OS, or
+auto-merge code. Release decision: **HOLD**.

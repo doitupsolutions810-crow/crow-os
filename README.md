@@ -127,3 +127,24 @@ explicitly enabled. The runner watches job status, writes a local audit JSON
 file, and never converts incomplete/failed jobs into false success claims.
 It does not grant arbitrary shell access or auto-merge suggested changes.
 See the [mission evidence registry](docs/registry/agent-mission-evidence-2026-11-15.md).
+
+### Longer monitored rounds and crash-safe evidence
+
+For up to five bounded, sequential rounds (four agents per round), with a
+single total deadline shared across all rounds:
+
+    python3 scripts/edge_mission.py --enable-network --rounds 3 \
+      --deadline 600 --evidence crow-os-edge-mission-results.json
+
+The runner first checks that Crow OS reports a reachable local Ollama and a
+verified ledger. It saves a private, atomic JSON checkpoint immediately after
+**each** confirmed job submission and on every polled job update. If the
+third submission fails, identifiers for the first two jobs remain recoverable.
+It stops launching new rounds if a job fails or times out.
+
+The evidence distinguishes tool *grants* from network *invocations actually
+observed in Crow OS ledger entries*. Unknown ledger evidence is recorded as
+unknown, never as zero tool use. This runner cannot edit OS code itself or
+automatically promote model-suggested changes; review reproducible findings
+and apply vetted changes through the repository and CI.
+
