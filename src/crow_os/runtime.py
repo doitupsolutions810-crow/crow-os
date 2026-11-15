@@ -19,10 +19,11 @@ from .agents import AgentRegistry
 from .capabilities import Broker
 from .devices import DeviceRegistry
 from .plugins import PluginRegistry
+from .routines import RoutineStore
 from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient, resolve_model  # noqa: F401
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
 from .workflow import Workflow
 from .worker import LLMWorker
 
@@ -51,6 +52,7 @@ class Kernel:
         self.agents = AgentRegistry(self.fs)  # user-created agents
         self.devices = DeviceRegistry(self.fs)  # hosting devices
         self.plugins = PluginRegistry(self.fs)  # connect-apps catalog
+        self.routines = RoutineStore(self.fs)  # scheduled agent runs
         self._spawn_depth: dict[str, int] = {}  # root job_id -> depth
         # Operator's explicit choice: may agent tools reach non-public
         # addresses (intranet)? Default NO — the SSRF guard refuses
@@ -75,10 +77,7 @@ class Kernel:
             return  # best-effort; the job already completed
         self.ledger.append("crow-os/tools", "tool.invoked", {
             "job_id": job_id, "tool": rec["tool"], "path": rec["path"],
-            "bytes": rec["bytes"],
-            # The kernel saved the artifact under its own short-lived cap. Without
-            # this, an agent with no fs.write grant looked like it had written.
-            "by": "kernel"})
+            "bytes": rec["bytes"]})
         self.outputs[job_id]["saved_to"] = rec["path"]
 
     def run_llm(self, objective: str, model: str | None = None,
@@ -86,8 +85,8 @@ class Kernel:
                 job_id: str | None = None,
                 tools_enabled: bool = True) -> dict[str, Any]:
         """Full chain with an LLM behind the capability gate (v0.2)."""
-        base = base_url or DEFAULT_BASE
-        client = OllamaClient(base_url=base, model=resolve_model(model, base))
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or DEFAULT_MODEL)
         cap = self.broker.issue(
             "crow-os/kernel",
             [{"method": "EXECUTE", "resource": "jobs.debugger"},
@@ -138,13 +137,22 @@ class Kernel:
         tools; governance still has the last word."""
         from .worker import AgentWorker
         agent = self.agents.get(agent_id)
+        # "remember: <text>" lines are stored in the agent's memory
+        # before the run, so they shape this run and every later one.
+        for line in objective.splitlines():
+            if line.strip().lower().startswith("remember:"):
+                note = line.split(":", 1)[1].strip()
+                if note:
+                    self.agent_memory_append(agent_id, f"- {note}\n")
+                    self.ledger.append("crow-os/kernel", "agent.remembered", {
+                        "agent": agent_id, "chars": len(note)})
         rights = [{"method": "EXECUTE", "resource": f"jobs.{agent_id}"}]
         rights += [{"method": "TOOL", "resource": t}
                    for t in agent.get("tools") or []]
         cap = self.broker.issue("crow-os/kernel", rights,
                                 ttl_seconds=900, rate_limit=20)
-        base = base_url or DEFAULT_BASE
-        client = OllamaClient(base_url=base, model=resolve_model(model or agent.get("model"), base))
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or agent.get("model") or DEFAULT_MODEL)
         from .tools import ToolRunner
         tools = ToolRunner(self.broker, cap,
                            allow_private=self.allow_private_tools) \
@@ -165,9 +173,16 @@ class Kernel:
             job_id = self.workflow.create_job(
                 objective, chain=[agent_id, "governance"])
         job = worker.run(objective, agent, cap,
-                         outputs=self.outputs, job_id=job_id)
+                         outputs=self.outputs, job_id=job_id,
+                         memory=self.agent_memory_read(agent_id))
         if job["status"] == "completed":
             self._persist_artifact(job["job_id"])
+            out = self.outputs.get(job["job_id"]) or {}
+            import time as _time
+            self.agent_memory_append(
+                agent_id,
+                f"- [{_time.strftime('%Y-%m-%d %H:%M')}] "
+                f"{objective[:100]} -> {(out.get('artifact') or '')[:140]}\n")
         return job
 
     def transcript(self, job_id: str) -> str:
@@ -206,7 +221,12 @@ class Kernel:
         if out.get("plan"):
             lines += ["## 🐛 Debugger — plan", "", out["plan"], ""]
         if out.get("artifact"):
-            who = out.get("agent") or "Coder"
+            if out.get("agent"):
+                who = out["agent"]
+            elif (job.get("chain") or [""])[0] == "fleet":
+                who = "Fleet — merged output"
+            else:
+                who = "Coder"
             lines += [f"## 🤖 {who} — output", "", out["artifact"], ""]
         for e in entries:
             raw = e["raw"]
@@ -240,6 +260,101 @@ class Kernel:
             lines += ["", "_⏳ This run is still in progress — the transcript "
                           "is partial._"]
         return "\n".join(lines) + "\n"
+
+    # -- agent memory ---------------------------------------------------
+    MEMORY_CAP = 32_768
+
+    def agent_memory_read(self, agent_id: str) -> str:
+        from .fs import FSError
+        try:
+            return self.fs.read_file(f"/system/agents/{agent_id}.memory.md")
+        except FSError:
+            return ""
+
+    def agent_memory_append(self, agent_id: str, text: str) -> None:
+        current = self.agent_memory_read(agent_id)
+        updated = (current + text).strip() + "\n"
+        if len(updated) > self.MEMORY_CAP:  # keep the newest notes
+            updated = updated[-self.MEMORY_CAP:]
+        self.fs.write_file(f"/system/agents/{agent_id}.memory.md", updated)
+
+    # -- routines ---------------------------------------------------------
+    def create_routine(self, name: str, agent_id: str, objective: str,
+                       interval_seconds: int) -> dict[str, Any]:
+        self.agents.get(agent_id)  # the agent must exist first
+        return self.routines.create(name, agent_id, objective, interval_seconds)
+
+    def fire_routine(self, routine: dict[str, Any],
+                     base_url: str | None = None) -> dict[str, Any]:
+        """Run one routine now: a normal governed agent run, attested
+        as routine.fired, with the store's bookkeeping updated."""
+        import time as _time
+        job_id = self.workflow.create_job(
+            routine["objective"], chain=[routine["agent"], "governance"])
+        self.ledger.append("crow-os/kernel", "routine.fired", {
+            "routine": routine["id"], "agent": routine["agent"],
+            "job_id": job_id})
+        self.routines.mark_run(routine["id"], _time.time())
+        return self.run_agent(routine["objective"], routine["agent"],
+                              base_url=base_url, job_id=job_id)
+
+    # -- fleet --------------------------------------------------------------
+    def fleet_run(self, objective: str, agent_ids: list[str],
+                  base_url: str | None = None, model: str | None = None,
+                  job_id: str | None = None) -> dict[str, Any]:
+        """Dispatch one objective across several agents in parallel.
+
+        Every member runs its own governed [agent, governance] job;
+        the fleet parent completes only if ALL members complete, and
+        the membership is attested (fleet.member) before anyone runs.
+        """
+        import threading as _threading
+        if not agent_ids or len(agent_ids) > 8:
+            raise ValueError("fleet needs 1..8 agents")
+        for aid in agent_ids:
+            self.agents.get(aid)  # validate the whole fleet first
+        if job_id is None:
+            job_id = self.workflow.create_job(
+                objective, chain=["fleet", "governance"])
+        members = []
+        for aid in agent_ids:
+            child_id = self.workflow.create_job(
+                objective, chain=[aid, "governance"])
+            self.ledger.append("crow-os/kernel", "fleet.member", {
+                "parent_job_id": job_id, "child_job_id": child_id,
+                "agent": aid})
+            members.append((aid, child_id))
+        results: dict[str, Any] = {}
+        def _run(aid: str, cid: str) -> None:
+            try:
+                results[cid] = self.run_agent(objective, aid, model=model,
+                                              base_url=base_url, job_id=cid)
+            except Exception as e:  # noqa: BLE001 - a crashed member is a failed member
+                results[cid] = {"job_id": cid, "status": "failed",
+                                "error": f"{type(e).__name__}: {e}"}
+        threads = [_threading.Thread(target=_run, args=m) for m in members]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        fleet = [{"agent": aid, "job_id": cid,
+                  "status": results[cid]["status"]} for aid, cid in members]
+        passed = all(f["status"] == "completed" for f in fleet)
+        summary = "\n".join(
+            f"- {f['agent']}: {f['status']} — "
+            f"{(self.outputs.get(f['job_id']) or {}).get('artifact', '')[:160]}"
+            for f in fleet)
+        self.outputs[job_id] = {"plan": "", "artifact": summary,
+                                "fleet": fleet}
+        state = self.workflow.report(
+            job_id, "fleet", passed,
+            f"{sum(1 for f in fleet if f['status'] == 'completed')}/{len(fleet)} members completed")
+        if state["status"] != "failed":
+            verdict = self.ledger.verify()
+            self.workflow.report(job_id, "governance", verdict["ok"],
+                                 f"ledger ok={verdict['ok']}")
+        job = self.workflow.get(job_id)
+        if job["status"] == "completed":
+            self._persist_artifact(job_id)
+        return job
 
     def computer_info(self) -> dict[str, Any]:
         """The Bot Computer page: the one computer the agents share —

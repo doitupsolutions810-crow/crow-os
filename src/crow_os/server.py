@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, MODEL_FROM_ENV, LLMUnavailable, OllamaClient, pick_local_model
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
@@ -35,13 +36,9 @@ class HomeServer:
         client = OllamaClient()
         try:
             h = client.health()
-            # The model a run with no explicit choice will actually use: the default when
-            # it is pulled (or set by CROW_OS_MODEL), else the best installed local model.
-            active = DEFAULT_MODEL if (h["model_present"] or MODEL_FROM_ENV) \
-                else (pick_local_model(h["models"]) or DEFAULT_MODEL)
             return {"reachable": True, "base": DEFAULT_BASE,
-                    "active": active, "default": DEFAULT_MODEL, "installed": h["models"],
-                    "active_installed": active in h["models"]}
+                    "active": DEFAULT_MODEL, "installed": h["models"],
+                    "active_installed": h["model_present"]}
         except LLMUnavailable as e:
             return {"reachable": False, "base": DEFAULT_BASE,
                     "active": DEFAULT_MODEL, "installed": [],
@@ -82,10 +79,7 @@ class HomeServer:
             return {"started": True, "mode": "agent", "agent": agent["id"],
                     "job": self.kernel.workflow.get(job_id)}
         if mode == "auto":
-            info = self.model_info()
-            # reachable with no usable model (nothing pulled yet) runs the demo instead of
-            # failing every job on a model that is not there; an explicit model is honored
-            mode = "llm" if info["reachable"] and (model or info["active_installed"]) else "demo"
+            mode = "llm" if self.model_info()["reachable"] else "demo"
         job_id = self.kernel.workflow.create_job(objective)
         if mode == "llm":
             target = lambda: self.kernel.run_llm(objective, model=model, job_id=job_id, tools_enabled=tools_enabled)  # noqa: E731
@@ -123,42 +117,6 @@ class HomeServer:
 
 def make_handler(home: HomeServer):
     class Handler(BaseHTTPRequestHandler):
-        def _safe(self, fn) -> None:
-            """Any unexpected error answers 500 JSON. Before, the handler thread
-            died and the client saw a dropped connection with no status."""
-            try:
-                fn()
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            except Exception as e:  # noqa: BLE001
-                import sys as _sys
-                print(f"crow-os: {self.command} {self.path[:200]} failed: "
-                      f"{type(e).__name__}: {e}", file=_sys.stderr)
-                try:
-                    self._json(500, {"error": "internal error"})
-                except Exception:  # noqa: BLE001 - headers may already be out
-                    pass
-
-        def do_GET(self):  # noqa: N802
-            self._safe(self._do_GET)
-
-        def do_POST(self):  # noqa: N802
-            self._safe(self._do_POST)
-
-        def do_DELETE(self):  # noqa: N802
-            self._safe(self._do_DELETE)
-
-        def _read_obj(self, length: int) -> dict:
-            """Request body as a JSON object. A list, a string, null, a negative
-            length (rfile.read(-1) would block the handler thread until the client
-            hangs up) or a body over 1 MiB raise ValueError -> clean 400."""
-            if length < 0 or length > 1 << 20:
-                raise ValueError("bad Content-Length")
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            if not isinstance(payload, dict):
-                raise ValueError("body must be a JSON object")
-            return payload
-
         def _json(self, code: int, obj: Any) -> None:
             body = json.dumps(obj).encode()
             self.send_response(code)
@@ -167,7 +125,7 @@ def make_handler(home: HomeServer):
             self.end_headers()
             self.wfile.write(body)
 
-        def _do_GET(self):
+        def do_GET(self):  # noqa: N802
             u = urlparse(self.path)
             if u.path == "/":
                 body = HOME_HTML.read_bytes()
@@ -202,6 +160,16 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/routines":
+                self._json(200, {"routines": home.kernel.routines.list()})
+            elif u.path.startswith("/api/agents/") and u.path.endswith("/memory"):
+                agent_id = u.path.split("/")[3]
+                try:
+                    home.kernel.agents.get(agent_id)
+                except Exception as e:  # noqa: BLE001
+                    return self._json(404, {"error": str(e)})
+                self._json(200, {"agent": agent_id,
+                                 "memory": home.kernel.agent_memory_read(agent_id)})
             elif u.path == "/api/plugins":
                 info = home.model_info()
                 plugins = home.kernel.plugins.list(info["reachable"])
@@ -253,8 +221,15 @@ def make_handler(home: HomeServer):
             else:
                 self._json(404, {"error": "not found"})
 
-        def _do_DELETE(self):
+        def do_DELETE(self):  # noqa: N802
             u = urlparse(self.path)
+            if u.path.startswith("/api/routines/"):
+                from .routines import RoutineError
+                try:
+                    home.kernel.routines.delete(u.path.rsplit("/", 1)[-1])
+                    return self._json(200, {"deleted": True})
+                except RoutineError as e:
+                    return self._json(404, {"error": str(e)})
             if u.path.startswith("/api/agents/"):
                 from .agents import AgentError
                 try:
@@ -264,13 +239,13 @@ def make_handler(home: HomeServer):
                     return self._json(404, {"error": str(e)})
             return self._json(404, {"error": "not found"})
 
-        def _do_POST(self):
+        def do_POST(self):  # noqa: N802
             u = urlparse(self.path)
             if u.path == "/api/agents":
                 from .agents import AgentError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = self._read_obj(length)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
                     agent = home.kernel.agents.create(
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
@@ -281,11 +256,59 @@ def make_handler(home: HomeServer):
                 except AgentError as e:
                     return self._json(400, {"error": str(e)})
                 return self._json(201, {"agent": agent})
+            if u.path == "/api/routines" or u.path.startswith("/api/routines/"):
+                from .routines import RoutineError
+                from .agents import AgentError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    if u.path == "/api/routines":
+                        routine = home.kernel.create_routine(
+                            payload.get("name"), payload.get("agent"),
+                            payload.get("objective"),
+                            payload.get("interval_seconds"))
+                        return self._json(201, {"routine": routine})
+                    rid = u.path.split("/")[3]
+                    if u.path.endswith("/toggle"):
+                        routine = home.kernel.routines.set_enabled(
+                            rid, bool(payload.get("enabled", True)))
+                        return self._json(200, {"routine": routine})
+                    return self._json(404, {"error": "not found"})
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except (RoutineError, AgentError) as e:
+                    return self._json(400, {"error": str(e)})
+            if u.path == "/api/fleet":
+                from .agents import AgentError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    objective = payload.get("objective")
+                    agents = payload.get("agents")
+                    if not isinstance(objective, str) or not objective.strip():
+                        return self._json(400, {"error": "objective must be a non-empty string"})
+                    if not isinstance(agents, list) or not agents:
+                        return self._json(400, {"error": "agents must be a non-empty list"})
+                    for aid in agents:
+                        home.kernel.agents.get(aid)
+                    parent_id = home.kernel.workflow.create_job(
+                        objective, chain=["fleet", "governance"])
+                    t = threading.Thread(
+                        target=home._guarded,
+                        args=(parent_id, lambda: home.kernel.fleet_run(
+                            objective, agents, job_id=parent_id)),
+                        daemon=True)
+                    t.start(); home._threads.append(t)
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except AgentError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(202, {"started": True, "job_id": parent_id})
             if u.path == "/api/plugins":
                 from .plugins import PluginError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = self._read_obj(length)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
                     home.kernel.plugins.set_asserted(
                         payload.get("id"), bool(payload.get("connected")))
                 except (ValueError, json.JSONDecodeError):
@@ -297,7 +320,7 @@ def make_handler(home: HomeServer):
                 from .devices import DeviceError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = self._read_obj(length)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
                     device = home.kernel.devices.register(
                         payload.get("name"), payload.get("kind", "device"),
                         payload.get("address", ""))
@@ -310,7 +333,7 @@ def make_handler(home: HomeServer):
                 from .agents import AgentError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = self._read_obj(length)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
                     agent_id = payload.get("agent")
                     objective = payload.get("objective")
                     parent = payload.get("parent")
@@ -337,7 +360,7 @@ def make_handler(home: HomeServer):
                 return self._json(404, {"error": "not found"})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
-                payload = self._read_obj(length)
+                payload = json.loads(self.rfile.read(length) or b"{}")
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "body must be JSON"})
             objective = payload.get("objective")
@@ -401,6 +424,18 @@ def make_handler(home: HomeServer):
 
 def serve(kernel: Kernel, port: int) -> int:
     home = HomeServer(kernel, port=port)
+
+    def _routine_loop() -> None:
+        while True:
+            time.sleep(5)
+            try:
+                for routine in kernel.routines.due():
+                    threading.Thread(
+                        target=kernel.fire_routine, args=(routine,),
+                        daemon=True).start()
+            except Exception:  # noqa: BLE001 - the loop must not die
+                continue
+    threading.Thread(target=_routine_loop, daemon=True).start()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(home))
     print(f"Crow OS Home Screen: http://127.0.0.1:{port}  (home: {kernel.home})")
     try:

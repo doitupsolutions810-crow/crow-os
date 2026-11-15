@@ -18,7 +18,6 @@ So the network tools here are built like everything else in Crow OS:
 """
 from __future__ import annotations
 
-import http.client
 import ipaddress
 import socket
 import urllib.error
@@ -40,28 +39,13 @@ class ToolError(Exception):
     pass
 
 
-_NAT64 = ipaddress.ip_network("64:ff9b::/96")
-
-
 def _ip_blocked(ip_text: str) -> bool:
-    """Only globally routable unicast addresses pass. is_private alone let
-    100.64.0.0/10 (carrier-grade NAT) through, and IPv6 forms that embed an
-    IPv4 address (::ffff:a.b.c.d, 64:ff9b::a.b.c.d NAT64, 2002::/16 6to4)
-    are judged by the IPv4 address they reach."""
     try:
-        ip = ipaddress.ip_address(ip_text.split("%", 1)[0])
+        ip = ipaddress.ip_address(ip_text)
     except ValueError:
         return True
-    if ip.version == 6:
-        if ip.ipv4_mapped is not None:
-            ip = ip.ipv4_mapped
-        elif ip in _NAT64:
-            ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
-        elif ip.sixtofour is not None:
-            ip = ip.sixtofour
-    return (not ip.is_global or ip.is_multicast or ip.is_private
-            or ip.is_loopback or ip.is_link_local or ip.is_reserved
-            or ip.is_unspecified)
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
 
 
 def _resolve_checked(host: str, allow_private: bool) -> list[str]:
@@ -90,53 +74,6 @@ class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
         if host:
             _resolve_checked(host, self._allow_private)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-def _pinned_create_connection(allow_private: bool):
-    """socket.create_connection that checks the address it actually connects
-    to. Checking getaddrinfo once and then letting urllib resolve again left a
-    DNS-rebinding window (public on check, 127.0.0.1 on connect)."""
-    def create(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
-               source_address=None, *a, **kw):
-        host, port = address
-        last = None
-        for ip in _resolve_checked(host, allow_private):
-            try:
-                return socket.create_connection((ip, port), timeout, source_address)
-            except OSError as e:
-                last = e
-        raise last or OSError(f"cannot connect to {host}")
-    return create
-
-
-class _PinnedHTTPHandler(urllib.request.HTTPHandler):
-    def __init__(self, allow_private: bool):
-        super().__init__()
-        self._mk = _pinned_create_connection(allow_private)
-
-    def http_open(self, req):
-        mk = self._mk
-
-        class Conn(http.client.HTTPConnection):
-            def __init__(self, *a, **kw):
-                super().__init__(*a, **kw)
-                self._create_connection = mk
-        return self.do_open(Conn, req)
-
-
-class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
-    def __init__(self, allow_private: bool):
-        super().__init__()
-        self._mk = _pinned_create_connection(allow_private)
-
-    def https_open(self, req):
-        mk = self._mk
-
-        class Conn(http.client.HTTPSConnection):
-            def __init__(self, *a, **kw):
-                super().__init__(*a, **kw)
-                self._create_connection = mk
-        return self.do_open(Conn, req, context=self._context)
 
 
 class ToolRunner:
@@ -169,17 +106,8 @@ class ToolRunner:
         if not host:
             raise ToolError("URL has no host")
         _resolve_checked(host, self.allow_private)
-        if urllib.request.getproxies() and not urllib.request.proxy_bypass(host):
-            # Egress goes through the configured proxy, which does its own DNS;
-            # the hop-by-hop check above still applies.
-            opener = urllib.request.build_opener(
-                _GuardedRedirectHandler(self.allow_private))
-        else:
-            opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({}),
-                _PinnedHTTPHandler(self.allow_private),
-                _PinnedHTTPSHandler(self.allow_private),
-                _GuardedRedirectHandler(self.allow_private))
+        opener = urllib.request.build_opener(
+            _GuardedRedirectHandler(self.allow_private))
         req = urllib.request.Request(
             url, headers={"User-Agent": "CrowOS/0.6 net.fetch"})
         try:
