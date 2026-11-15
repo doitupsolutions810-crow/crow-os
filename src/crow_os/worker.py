@@ -21,6 +21,7 @@ from .workflow import Workflow
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _DELEGATE_RE = re.compile(r"^delegate to ([a-z0-9][a-z0-9\-]*):\s*(.+)$", re.I)
+_FS_RE = re.compile(r"^fs (read|list):\s*(.+)$", re.I)
 
 PROMPTS = {
     "debugger": ("You are the debugger/planner in a 4-role chain. "
@@ -133,13 +134,14 @@ class AgentWorker:
 
     def __init__(self, broker: Broker, workflow: Workflow, ledger: Ledger,
                  client: OllamaClient, tools: ToolRunner | None = None,
-                 spawner=None):
+                 spawner=None, file_tools=None):
         self.broker = broker
         self.workflow = workflow
         self.ledger = ledger
         self.client = client
         self.tools = tools
         self.spawner = spawner  # callable(parent_job_id, agent_id, objective) -> job
+        self.file_tools = file_tools
 
     def run(self, objective: str, agent: dict[str, Any], cap: dict[str, Any],
             outputs: dict | None = None,
@@ -164,6 +166,37 @@ class AgentWorker:
                     "bytes": fetched["bytes"]})
                 context = (f"\nFetched context from {fetched['url']} "
                            f"(status {fetched['status']}):\n{fetched['excerpt']}\n")
+            # File directives: "fs read: <path>" / "fs list: <path>"
+            # lines pull CrowFS content into the agent's context —
+            # only with the matching grant, gated before any disk
+            # I/O, attested, and fail-soft like delegation.
+            if self.file_tools is not None:
+                done = 0
+                for line in objective.splitlines():
+                    m = _FS_RE.match(line.strip())
+                    if not m or done >= 3:
+                        continue
+                    op, vpath = m.group(1).lower(), m.group(2).strip()
+                    if f"fs.{op}" not in (agent.get("tools") or []):
+                        continue
+                    done += 1
+                    try:
+                        if op == "read":
+                            r = self.file_tools.read(vpath)
+                            self.ledger.append("crow-os/tools", "tool.invoked", {
+                                "job_id": job_id, "tool": "fs.read",
+                                "path": vpath, "bytes": len(r["content"].encode())})
+                            context += (f"\nFile {vpath}:\n"
+                                        f"{r['content'][:4000]}\n")
+                        else:
+                            r = self.file_tools.list(vpath)
+                            names = [e["name"] for e in r["entries"]]
+                            self.ledger.append("crow-os/tools", "tool.invoked", {
+                                "job_id": job_id, "tool": "fs.list",
+                                "path": vpath, "entries": len(names)})
+                            context += f"\nListing {vpath}: {', '.join(names)}\n"
+                    except Exception as e:  # noqa: BLE001 - fail soft
+                        context += f"\n(fs {op} {vpath} failed: {e})\n"
             if outputs is not None:
                 outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
             reply = self.client.chat_stream(
@@ -184,9 +217,7 @@ class AgentWorker:
             # agent.spawned and enforces the depth cap).
             if self.spawner is not None and \
                     "agent.spawn" in (agent.get("tools") or []):
-                # After the agent step, a denied delegation is a governance
-                # failure, not a second report on the already finished role.
-                role = "governance"
+                role = "governance"  # failure cannot re-report completed agent step
                 subs = []
                 for line in objective.splitlines():
                     m = _DELEGATE_RE.match(line.strip())
@@ -195,9 +226,8 @@ class AgentWorker:
                         # role, depth cap) must not kill the parent
                         # job: record the refusal and carry on to
                         # governance.
-                        # The agent definition is NOT authority. Check the
-                        # signed, scoped TOOL capability for every actual
-                        # spawn before starting a child. Denials fail closed.
+                        # Verify a signed TOOL grant on EACH delegation.
+                        # Agent-declared tools do not themselves authorize work.
                         self.broker.authorize(cap, "TOOL", "agent.spawn")
                         try:
                             child = self.spawner(job_id, m.group(1),
@@ -205,9 +235,7 @@ class AgentWorker:
                             subs.append({"agent": m.group(1),
                                          "job_id": child["job_id"],
                                          "status": child["status"]})
-                        except Exception as e:  # noqa: BLE001 - invalid child
-                            # A missing/depth-limited child is recorded as an
-                            # error without inventing a successful child job.
+                        except Exception as e:  # noqa: BLE001 - fail soft
                             subs.append({"agent": m.group(1),
                                          "error": f"{type(e).__name__}: {e}"})
                 if subs and outputs is not None:

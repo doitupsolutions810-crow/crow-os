@@ -123,3 +123,7 @@ Merged upstream `28c14838505920f1fa6c8c412970419c6a6de90e` as an independent par
 ## Chat runtime compatibility reconciliation — ffc3d379466f82bb43249627abc5597563892c72
 
 The branch merged newer Crow OS main carrying transcript export and additional probe harnesses. The new HTTP intake safeguards were applied on top of main's server, not by overwriting its transcript endpoints; main's CLI was extended with the existing Ollama smoke and AVRONE evidence commands without losing transcript support. Agent naming, custom instructions, avatar choices, live streaming and device plugins were preserved from upstream. Full branch CI remains required.
+
+## Upstream file-directive agent tooling — 21da94dd63830a5e740edf5b1fd9d2bd26699e68
+
+The integration includes the current upstream worker's fs.read and fs.list context directives and its Kernel FileTools wiring; the signed agent.spawn TOOL check was re-applied to that worker. Exact-head CI is required for both the original probes and new agent mission tests.
