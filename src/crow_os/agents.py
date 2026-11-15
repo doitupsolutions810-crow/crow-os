@@ -34,6 +34,17 @@ MAX_NAME = 60
 MAX_INSTRUCTIONS = 4000
 RESERVED = {"debugger", "coder", "tester", "governance", "kernel", "squad"}
 
+# The Create-a-Bot sheet from the Grok Bot app: a grid of blob shapes
+# and a row of colors. Agents carry both, rendered everywhere they
+# appear (rail, chat header, profile).
+AVATAR_SHAPES = ["blob", "round", "square", "tall", "wide", "drop",
+                 "diamond", "ring", "pill", "star", "hex", "wave", "egg"]
+AVATAR_COLORS = {"white": "#f5f5f5", "brown": "#8d6e63", "red": "#ef5350",
+                 "orange": "#ff7a1a", "yellow": "#ffd54f", "green": "#66bb6a",
+                 "teal": "#26a69a", "blue": "#42a5f5", "purple": "#ab47bc",
+                 "pink": "#ec407a", "gray": "#9e9e9e"}
+DEFAULT_AVATAR = {"shape": "blob", "color": "orange"}
+
 
 class AgentError(Exception):
     pass
@@ -51,7 +62,8 @@ class AgentRegistry:
 
     def create(self, name: str, instructions: str,
                model: str | None = None,
-               tools: list[str] | None = None) -> dict[str, Any]:
+               tools: list[str] | None = None,
+               avatar: dict[str, str] | None = None) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise AgentError("agent name is required")
         name = name.strip()
@@ -76,8 +88,18 @@ class AgentRegistry:
         while self.fs.exists(f"{AGENTS_DIR}/{agent_id}.json"):
             agent_id = f"{base}-{n}"
             n += 1
+        look = dict(DEFAULT_AVATAR)
+        if avatar:
+            if avatar.get("shape") is not None:
+                if avatar["shape"] not in AVATAR_SHAPES:
+                    raise AgentError(f"unknown avatar shape {avatar['shape']!r}")
+                look["shape"] = avatar["shape"]
+            if avatar.get("color") is not None:
+                if avatar["color"] not in AVATAR_COLORS:
+                    raise AgentError(f"unknown avatar color {avatar['color']!r}")
+                look["color"] = avatar["color"]
         agent = {"id": agent_id, "name": name, "instructions": instructions,
-                 "model": model or None, "tools": grants,
+                 "model": model or None, "tools": grants, "avatar": look,
                  "created": time.time()}
         self.fs.write_file(f"{AGENTS_DIR}/{agent_id}.json",
                            json.dumps(agent, indent=2))

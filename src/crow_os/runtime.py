@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from .agents import AgentRegistry
 from .capabilities import Broker
 from .devices import DeviceRegistry
+from .plugins import PluginRegistry
 from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
@@ -48,6 +50,7 @@ class Kernel:
         self.fs = CrowFS(home)  # the OS file system (<home>/fs)
         self.agents = AgentRegistry(self.fs)  # user-created agents
         self.devices = DeviceRegistry(self.fs)  # hosting devices
+        self.plugins = PluginRegistry(self.fs)  # connect-apps catalog
         self._spawn_depth: dict[str, int] = {}  # root job_id -> depth
         # Operator's explicit choice: may agent tools reach non-public
         # addresses (intranet)? Default NO — the SSRF guard refuses
@@ -157,6 +160,24 @@ class Kernel:
         if job["status"] == "completed":
             self._persist_artifact(job["job_id"])
         return job
+
+    def computer_info(self) -> dict[str, Any]:
+        """The Bot Computer page: the one computer the agents share —
+        real disk numbers, the size of the Crow OS home, and the
+        ledger depth. (Rebuilding state is non-destructive here: the
+        workflow is always rebuilt from the signed ledger.)"""
+        import shutil
+        total, _used, free = shutil.disk_usage(self.home)
+        home_bytes = 0
+        for dirpath, _dirs, names in os.walk(self.home):
+            for n in names:
+                try:
+                    home_bytes += os.path.getsize(os.path.join(dirpath, n))
+                except OSError:
+                    pass
+        return {"disk_total": total, "disk_free": free,
+                "home_bytes": home_bytes, "home": str(self.home),
+                "ledger": self.ledger.verify()["entries"]}
 
     def run_demo(self, objective: str,
                  job_id: str | None = None) -> dict[str, Any]:
