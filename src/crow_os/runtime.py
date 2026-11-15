@@ -20,6 +20,7 @@ from .capabilities import Broker
 from .devices import DeviceRegistry
 from .plugins import PluginRegistry
 from .routines import RoutineStore
+from .connectors import ConnectorRegistry
 from .federation import (FederationError, Identity, PeerStore,
                          signed_dispatch, _slug as _slug_name)
 from .fs import CrowFS
@@ -55,6 +56,7 @@ class Kernel:
         self.devices = DeviceRegistry(self.fs)  # hosting devices
         self.plugins = PluginRegistry(self.fs)  # connect-apps catalog
         self.routines = RoutineStore(self.fs)  # scheduled agent runs
+        self.connectors = ConnectorRegistry(self.fs, self.home)
         self.peers = PeerStore(self.fs)  # federation peer registry
         self._identity: Identity | None = None
         self._identity_error: str | None = None
@@ -171,9 +173,15 @@ class Kernel:
         file_tools = FileTools(self.broker, cap, self.fs) \
             if tools_enabled and any(t.startswith("fs.")
                                      for t in agent.get("tools") or []) else None
+        def connector_call(tool: str) -> dict[str, Any]:
+            # the gate is checked BEFORE the connector is touched
+            self.broker.authorize(cap, "TOOL", tool)
+            return self.connectors.call(tool)
         worker = AgentWorker(self.broker, self.workflow, self.ledger,
                              client, tools=tools, spawner=spawner,
-                             file_tools=file_tools)
+                             file_tools=file_tools,
+                             connector_call=connector_call
+                             if tools_enabled else None)
         if job_id is None:
             job_id = self.workflow.create_job(
                 objective, chain=[agent_id, "governance"])

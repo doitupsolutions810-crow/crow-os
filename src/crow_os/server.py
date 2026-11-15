@@ -160,6 +160,10 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/connectors":
+                from .connectors import CONNECTOR_TOOLS
+                self._json(200, {"connectors": [
+                    home.kernel.connectors.status(cid) for cid in CONNECTOR_TOOLS]})
             elif u.path == "/api/identity":
                 self._json(200, home.kernel.identity_info())
             elif u.path == "/api/peers":
@@ -176,7 +180,9 @@ def make_handler(home: HomeServer):
                                  "memory": home.kernel.agent_memory_read(agent_id)})
             elif u.path == "/api/plugins":
                 info = home.model_info()
-                plugins = home.kernel.plugins.list(info["reachable"])
+                plugins = home.kernel.plugins.list(
+                    info["reachable"],
+                    connector_states=home.kernel.connectors.all_states())
                 self._json(200, {"plugins": plugins, "connected":
                                  sum(1 for p in plugins if p["connected"])})
             elif u.path == "/api/computer":
@@ -261,7 +267,8 @@ def make_handler(home: HomeServer):
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
                         tools=payload.get("tools"),
-                        avatar=payload.get("avatar"))
+                        avatar=payload.get("avatar"),
+                        extra_tools=home.kernel.connectors.tool_names())
                 except (ValueError, json.JSONDecodeError):
                     return self._json(400, {"error": "body must be JSON"})
                 except AgentError as e:
@@ -315,6 +322,18 @@ def make_handler(home: HomeServer):
                 except AgentError as e:
                     return self._json(400, {"error": str(e)})
                 return self._json(202, {"started": True, "job_id": parent_id})
+            if u.path.startswith("/api/connectors/"):
+                from .connectors import ConnectorError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    status = home.kernel.connectors.configure(
+                        u.path.rsplit("/", 1)[-1], payload.get("base_url"))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except ConnectorError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(200, {"connector": status})
             if u.path == "/api/peers":
                 from .federation import FederationError
                 try:

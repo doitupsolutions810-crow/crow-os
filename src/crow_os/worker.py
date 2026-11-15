@@ -22,6 +22,7 @@ from .workflow import Workflow
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _DELEGATE_RE = re.compile(r"^delegate to ([a-z0-9][a-z0-9\-]*):\s*(.+)$", re.I)
 _FS_RE = re.compile(r"^fs (read|list):\s*(.+)$", re.I)
+_CONNECTOR_RE = re.compile(r"^connector:\s*([a-z0-9.\-]+)$", re.I)
 
 PROMPTS = {
     "debugger": ("You are the debugger/planner in a 4-role chain. "
@@ -134,7 +135,7 @@ class AgentWorker:
 
     def __init__(self, broker: Broker, workflow: Workflow, ledger: Ledger,
                  client: OllamaClient, tools: ToolRunner | None = None,
-                 spawner=None, file_tools=None):
+                 spawner=None, file_tools=None, connector_call=None):
         self.broker = broker
         self.workflow = workflow
         self.ledger = ledger
@@ -142,6 +143,7 @@ class AgentWorker:
         self.tools = tools
         self.spawner = spawner  # callable(parent_job_id, agent_id, objective) -> job
         self.file_tools = file_tools
+        self.connector_call = connector_call
 
     def run(self, objective: str, agent: dict[str, Any], cap: dict[str, Any],
             outputs: dict | None = None,
@@ -198,6 +200,29 @@ class AgentWorker:
                             context += f"\nListing {vpath}: {', '.join(names)}\n"
                     except Exception as e:  # noqa: BLE001 - fail soft
                         context += f"\n(fs {op} {vpath} failed: {e})\n"
+            # Connector directives: "connector: <tool>" lines run a
+            # granted connector tool — gated inside the runner,
+            # attested, excerpt into context, fail-soft.
+            if self.connector_call is not None:
+                for line in objective.splitlines():
+                    m = _CONNECTOR_RE.match(line.strip())
+                    if not m:
+                        continue
+                    tool = m.group(1).strip().lower()
+                    if tool not in (agent.get("tools") or []):
+                        continue
+                    try:
+                        r = self.connector_call(tool)
+                        self.ledger.append("crow-os/tools", "tool.invoked", {
+                            "job_id": job_id, "tool": tool,
+                            "result": {k: v for k, v in r.items() if k != "tool"}})
+                        if "repos" in r:
+                            context += (f"\n{tool} ({r.get('count', 0)}): "
+                                        f"{', '.join(r['repos'][:40])}\n")
+                        else:
+                            context += f"\n{tool}: {r}\n"
+                    except Exception as e:  # noqa: BLE001 - fail soft
+                        context += f"\n({tool} failed: {e})\n"
             if outputs is not None:
                 outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
             memory_block = (f"\nYour memory from earlier runs:\n"

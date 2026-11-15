@@ -75,13 +75,20 @@ class PluginRegistry:
         state[plugin_id] = bool(connected)
         self.fs.write_file(PLUGINS_FILE, json.dumps(state, indent=2))
 
-    def list(self, ollama_reachable: bool = False) -> list[dict[str, Any]]:
+    def list(self, ollama_reachable: bool = False,
+             connector_states: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        connector_states = connector_states or {}
         asserted = self._asserted()
         out = []
         for p in CATALOG:
             entry = dict(p)
+            cstate = connector_states.get(p["id"])
             if p["kind"] == "builtin":
                 entry["connected"], entry["state"] = True, "built-in"
+            elif cstate == "live":
+                entry["connected"], entry["state"] = True, "live · verified"
+            elif cstate == "unreachable":
+                entry["connected"], entry["state"] = False, "configured · unreachable"
             elif p["kind"] == "verified":
                 entry["connected"] = bool(ollama_reachable)
                 entry["state"] = "verified" if ollama_reachable else "not reachable"
