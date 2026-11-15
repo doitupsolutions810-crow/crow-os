@@ -58,6 +58,12 @@
   .step .st{margin-left:auto}
   .livebox{margin:6px 0 2px;background:#0d0d10;border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:12.5px;color:#c9c9d1;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow-y:auto}
   .livebox:empty{display:none}
+  .suggest{display:grid;grid-template-columns:1fr 1fr;gap:10px;max-width:640px;margin:22px auto 0}
+  .suggest button{text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;color:var(--txt);cursor:pointer;font-size:13.5px}
+  .suggest button:hover{border-color:var(--dim)}
+  .suggest button span{display:block;color:var(--dim);font-size:12px;margin-top:3px}
+  #filesview .fitem{display:block;width:100%;text-align:left;background:none;border:none;border-bottom:1px solid var(--line);color:var(--txt);padding:7px 4px;cursor:pointer;font-size:13px}
+  #topbar select{margin-left:auto}
   /* composer — Grok-style */
   #composerwrap{padding:10px 18px 18px}
   #composer{max-width:780px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:10px 12px 8px}
@@ -99,19 +105,26 @@
     <div>🔗 <b id="sb-verify">—</b></div>
     <div>🏠 <b id="sb-home">—</b></div>
     <div>⚙️ Kernel <b id="sb-ver">—</b></div>
+    <select id="modelsel"><option value="">Loading models…</option></select>
     <button id="buildbtn">🛠️ Build panel</button>
   </div>
   <div id="msgs"><div class="col" id="msgcol">
     <div class="hello" id="hello">
-      <h1>How can the squad help?</h1>
-      <p>Governed agents on your OS-installed Ollama — every step capability-gated and written to the signed ledger.</p>
+      <h1>What do you want to know?</h1>
+      <p>Ask anything. Governed agents on your OS-installed Ollama — every step capability-gated and written to the signed ledger.</p>
+      <div class="suggest">
+        <button data-say="Continue Even Longer more robust Test against even more Edge cases and Fix Along the way">🧪 Test the edge cases<span>Run the squad against the hard cases</span></button>
+        <button data-say="Summarize https://example.com and tell me what it says">🌐 Fetch a page<span>The coder pulls it in with the network tool</span></button>
+        <button data-files="1">📁 Browse the file system<span>Documents, downloads, system files</span></button>
+        <button data-say="Verify the signed ledger and report whether the chain is intact">📜 Verify the ledger<span>Check every signature and hash link</span></button>
+      </div>
     </div>
   </div></div>
   <div id="composerwrap">
     <form id="composer">
-      <textarea id="objective" rows="1" placeholder="Message Crow OS…"></textarea>
+      <textarea id="objective" rows="1" placeholder="Ask anything"></textarea>
       <div class="crow">
-        <select id="modelsel"><option value="">Loading models…</option></select>
+        <button id="plusbtn" type="button" title="New chat">＋</button>
         <span class="hint" id="modehint">backend: —</span>
         <button id="send" type="submit" title="Run">↑</button>
       </div>
@@ -125,6 +138,7 @@
     <button data-view="appview">🖥️ App</button>
     <button data-view="ledgerview">📜 Ledger</button>
     <button data-view="sandboxview">🧪 Sandbox</button>
+    <button data-view="filesview">📁 Files</button>
     <button id="buildclose" style="margin-left:auto">✕</button>
   </header>
   <div class="view on" id="codeview">
@@ -137,6 +151,11 @@
     <table><thead><tr><th>seq</th><th>kind</th><th>detail</th><th>sig</th></tr></thead><tbody id="ledgerbody"></tbody></table>
   </div>
   <div class="view" id="sandboxview"><h4>Sandbox</h4><pre id="sandboxdetail">—</pre></div>
+  <div class="view" id="filesview">
+    <h4>File system — <span id="fspath">/</span></h4>
+    <div id="fslist"><div class="empty">Open to browse the OS file system.</div></div>
+    <pre id="filecontent"></pre>
+  </div>
 </aside>
 
 <script>
@@ -353,6 +372,38 @@ document.querySelectorAll("#build header button[data-view]").forEach(b=>b.addEve
   if(b.dataset.view==="ledgerview")refreshLedger();
 }));
 $("#newchat").addEventListener("click",()=>{$("#objective").focus(); window.scrollTo(0,0);});
+
+/* ── suggestions + plus ── */
+document.querySelectorAll("[data-say]").forEach(b=>b.addEventListener("click",()=>{
+  $("#objective").value=b.getAttribute("data-say"); $("#composer").requestSubmit(); }));
+document.querySelectorAll("[data-files]").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelector('[data-view="filesview"]').click(); loadFs("/"); }));
+$("#plusbtn").addEventListener("click",()=>{ $("#objective").value=""; $("#objective").focus(); });
+
+/* ── files browser (the OS file system, via /api/fs) ── */
+let fscur="/";
+async function loadFs(path){
+  fscur=path; $("#fspath").textContent=path; $("#filecontent").textContent="";
+  const box=$("#fslist"); box.innerHTML="";
+  try{
+    const d=await (await fetch("/api/fs?path="+encodeURIComponent(path))).json();
+    if(d.error){ box.textContent=d.error; return; }
+    if(path!=="/"){ const up=document.createElement("button"); up.className="fitem"; up.textContent="📁 ..";
+      up.addEventListener("click",()=>loadFs(path.replace(/\/[^/]*$/,"")||"/")); box.appendChild(up); }
+    (d.entries||[]).forEach(e=>{ const b=document.createElement("button"); b.className="fitem";
+      b.textContent=(e.type==="dir"?"📁 ":"📄 ")+e.name+(e.type==="file"?`  (${e.size}b)`:"");
+      b.addEventListener("click",()=>{ const child=(path==="/"?"/":"")+ (path==="/"?e.name:path.slice(1)+"/"+e.name);
+        const cp=path==="/"?"/"+e.name:path+"/"+e.name;
+        if(e.type==="dir") loadFs(cp); else readFs(cp); });
+      box.appendChild(b); });
+    if(!(d.entries||[]).length) box.innerHTML='<div class="empty">Empty directory</div>';
+  }catch(_){ box.textContent="File system unavailable (demo feed)."; }
+}
+async function readFs(path){
+  try{ const d=await (await fetch("/api/fs/read?path="+encodeURIComponent(path))).json();
+    $("#filecontent").textContent=d.error?("⚠ "+d.error):d.content; }
+  catch(_){ $("#filecontent").textContent="Cannot read file."; }
+}
 
 /* ── composer ── */
 $("#composer").addEventListener("submit",async e=>{
