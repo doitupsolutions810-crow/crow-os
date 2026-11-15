@@ -109,3 +109,39 @@ started or monitored from the user's machine.
 The mission client only observes and reports existing network-tool events.
 It does not grant arbitrary shell access, patch the running OS, or
 auto-merge code. Release decision: **HOLD**.
+
+
+## Parallel fleet / connector integration verification — 2026-11-15
+
+Reconciled with upstream Crow OS v0.16 (main baseline
+1c46f7dbef28f4cd36e08e1f2941f7f4bd9301b6). The source tree
+retains upstream scheduled routines, federation peer endpoints, device
+hosting and GitHub connector catalog. Release decision: HOLD.
+
+| Accountable source | Resource / assertion | Execution evidence |
+| --- | --- | --- |
+| [Agent mission](../../scripts/edge_mission.py) | Native /api/fleet; four named custom agents; bounded 1..5 rounds; strict job identity and fleet acknowledgement; checkpoint at each submission/poll | Isolated mock HTTP tests passed |
+| [Fleet tests](../../tests/test_edge_fleet_mission.py) | Two parallel fleet rounds (8 child status summaries), reuse and fail-stop, network grant opt-in | Four isolated cases passed |
+| [Mission identity tests](../../tests/test_edge_mission_identity.py) | 250 deterministic malformed IDs, duplicate agent ID, wrong job status attribution, false fleet start | Six isolated tests passed |
+| [Connector tool gate](../../src/crow_os/connector_tooling.py) | Explicit, allowlisted github.repos / github.whoami directives; at most two calls; broker grant before network; no untrusted model commands; serialize results before signed success attestation | Eight isolated mock connector tests passed |
+| [Connector tool tests](../../tests/test_connector_directives.py) | Missing/unknown grants, budget, malformed source, two calls, non-JSON results do not mint success evidence | Committed; full repository test pending |
+| [Named agents](../../src/crow_os/agents.py) | Custom instructions, IDs and avatars persist; known connector tools accepted only via approved extra_tools catalog | Four isolated connector grant checks passed |
+| [Kernel](../../src/crow_os/runtime.py) | Initializes the native ConnectorRegistry; passes it to agent worker only when tools are enabled | Committed; full kernel verification pending |
+| [Agent worker](../../src/crow_os/worker.py) | Injects validated connector results as untrusted context; checks actual agent.spawn TOOL grant before child dispatch; keeps v0.16 agent memory/routine behavior | Committed; CI pending |
+| [CLI](../../src/crow_os/cli.py) | Agent creation recognizes native connector catalog | Committed; CI pending |
+| [HTTP server](../../src/crow_os/server.py) | Applies 64 KiB object JSON bound to 10 POST routes including federation, and passes trusted connector tool catalog when creating agents | Committed; CI pending |
+| [Full kernel connector tests](../../tests/test_native_github_connector_agents.py) | Four tests: persistence, mocked read-only GitHub grant, signed tool-use event, ungranted denial | Committed; exact-head CI pending |
+| [CI](https://github.com/doitupsolutions810-crow/crow-os/pull/1/checks) | Python 3.11/3.12 full suite and all upstream probe harnesses | No completed exact-head run yet |
+
+**Isolated local execution:** Python 3.13.5, 53/53 tests passed,
+including 8 mock connector tests and multi-process duplicate-name
+tests. A synthetic fleet trace exercised two parent jobs with eight
+member-status summaries. No genuine GitHub connector token or network
+response was used in that trace. These are NOT complete checkout,
+user-Mac Ollama, hosted federation or deployment results.
+
+**Physical integration block:** No connected Remote Desktop device;
+loopback Crow OS 127.0.0.1:8787 and Ollama 127.0.0.1:11434 were not
+reachable from the test runtime. The user's live chat received no
+request from this session. No production merge, deployment or automatic
+running-OS patch was performed.
