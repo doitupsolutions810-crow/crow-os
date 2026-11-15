@@ -91,6 +91,12 @@
   .switch i:after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:3px;left:3px;transition:.15s}
   .switch input:checked + i{background:#4caf7d}
   .switch input:checked + i:after{left:21px}
+  #hud{display:flex;align-items:center;gap:14px;padding:6px 18px;font-size:12px;color:var(--dim);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  #hud .sp{flex:1}
+  .hudtool{display:inline-flex;align-items:center;gap:7px;cursor:pointer}
+  .switch.sm{width:32px;height:18px}
+  .switch.sm i:after{width:12px;height:12px}
+  .switch.sm input:checked + i:after{left:17px}
   /* composer — Grok-style */
   #composerwrap{padding:10px 18px 18px}
   #composer{max-width:780px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:10px 12px 8px}
@@ -130,6 +136,7 @@
     <input id="agname" placeholder="Agent name" maxlength="60">
     <textarea id="agins" rows="4" placeholder="Custom instructions — what should this agent do, and how?"></textarea>
     <label class="agtool"><input type="checkbox" id="agtool-net"> 🌐 net.fetch — let it fetch pages</label>
+    <label class="agtool"><input type="checkbox" id="agtool-spawn"> ⤵ agent.spawn — let it delegate to sub-agents (“delegate to &lt;agent&gt;: …”)</label>
     <button id="agcreate" type="submit">Create agent</button>
     <div class="hint" id="agerr"></div>
   </form>
@@ -140,6 +147,15 @@
 </aside>
 
 <section id="main">
+  <div id="hud">
+    <span id="hud-device">🖥 …</span>
+    <span id="hud-host">hosting: —</span>
+    <label class="hudtool" title="Master switch for agent tooling (network fetch, file tools, sub-agent spawning) on new runs">
+      🛠 Tools <span class="switch sm"><input type="checkbox" id="hud-tools" checked><i></i></span></label>
+    <span id="hud-agents">🤖 agents working: 0</span>
+    <span class="sp"></span>
+    <span id="hud-note"></span>
+  </div>
   <div id="chathead">
     <span id="chatwho">🐦‍⬛ Crow OS</span><span class="sp"></span>
     <button class="iconbtn" id="setbtn" title="Settings">⚙️</button>
@@ -333,7 +349,7 @@ function applyEntry(rec,e){
 
 /* ── live run: SSE first, polling fallback ── */
 async function runLive(objective,mode,model){
-  const payload={objective,mode,model};
+  const payload={objective,mode,model,tools:(typeof settings==="undefined"||settings.tools!==false)};
   if(typeof selectedAgent!=="undefined"&&selectedAgent) payload.agent=selectedAgent;
   const r=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(payload)});
@@ -486,6 +502,26 @@ const _obj=$("#objective"), _send=$("#send");
 function _sendVis(){ _send.style.visibility=_obj.value.trim()?"visible":"hidden"; }
 _obj.addEventListener("input",_sendVis); _sendVis();
 
+/* ── tooling HUD: device + hosting, tools master switch, live agents ── */
+const _hudTools=$("#hud-tools");
+if(_hudTools){ _hudTools.checked = (typeof settings==="undefined"||settings.tools!==false);
+  _hudTools.addEventListener("change",()=>{ settings.tools=_hudTools.checked; saveSettings();
+    $("#hud-note").textContent=_hudTools.checked?"tools on for new runs":"tools OFF for new runs"; }); }
+async function loadHud(){
+  try{ const d=await (await fetch("/api/devices")).json();
+    const local=(d.devices||[])[0]||{};
+    $("#hud-device").textContent="🖥 "+(local.name||"this device")+" · Ollama "+(local.ollama&&local.ollama.reachable?"●":"○");
+    $("#hud-host").textContent="hosting: "+(d.hosting&&d.hosting.serving?("live on :"+d.hosting.port):"not serving");
+  }catch(_){ $("#hud-device").textContent="🖥 demo feed"; $("#hud-host").textContent="hosting: —"; }
+  try{ const j=await (await fetch("/api/jobs")).json();
+    const squad=["debugger","coder","tester","governance"];
+    const working=(j.jobs||[]).filter(x=>x.status==="running"&&x.chain&&x.chain.length===2&&!squad.includes(x.chain[0])).length;
+    const running=(j.jobs||[]).filter(x=>x.status==="running").length;
+    $("#hud-agents").textContent="🤖 agents working: "+working+" · runs active: "+running;
+  }catch(_){}
+}
+loadHud(); setInterval(loadHud, 15000);
+
 /* ── custom agents ── */
 let selectedAgent=null;
 async function loadAgents(){
@@ -507,8 +543,9 @@ async function loadAgents(){
 $("#newagent").addEventListener("click",()=>{ const f=$("#agentform");
   f.style.display=f.style.display==="none"?"block":"none"; });
 $("#agentform").addEventListener("submit",async e=>{ e.preventDefault();
-  const body={name:$("#agname").value, instructions:$("#agins").value,
-              tools:$("#agtool-net").checked?["net.fetch"]:[]};
+  const _tools=[]; if($("#agtool-net").checked)_tools.push("net.fetch");
+  if($("#agtool-spawn")&&$("#agtool-spawn").checked)_tools.push("agent.spawn");
+  const body={name:$("#agname").value, instructions:$("#agins").value, tools:_tools};
   try{ const r=await fetch("/api/agents",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const d=await r.json();
     if(!r.ok){ $("#agerr").textContent=d.error||"could not create agent"; return; }

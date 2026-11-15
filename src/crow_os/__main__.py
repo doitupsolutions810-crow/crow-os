@@ -1,5 +1,5 @@
-"""Run Crow OS with `python -m crow_os` from an installed package or PYTHONPATH=src."""
+"""`python -m crow_os ...` as the README documents (there was no __main__, so it failed)."""
 from .cli import main
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

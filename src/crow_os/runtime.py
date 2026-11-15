@@ -16,10 +16,11 @@ from typing import Any
 
 from .agents import AgentRegistry
 from .capabilities import Broker
+from .devices import DeviceRegistry
 from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient, resolve_model  # noqa: F401
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
 from .workflow import Workflow
 from .worker import LLMWorker
 
@@ -46,6 +47,8 @@ class Kernel:
         self.outputs: dict[str, dict[str, str]] = {}  # job_id -> plan/artifact (for the Home Screen code view)
         self.fs = CrowFS(home)  # the OS file system (<home>/fs)
         self.agents = AgentRegistry(self.fs)  # user-created agents
+        self.devices = DeviceRegistry(self.fs)  # hosting devices
+        self._spawn_depth: dict[str, int] = {}  # root job_id -> depth
         # Operator's explicit choice: may agent tools reach non-public
         # addresses (intranet)? Default NO — the SSRF guard refuses
         # loopback/RFC1918/link-local/metadata destinations.
@@ -74,10 +77,11 @@ class Kernel:
 
     def run_llm(self, objective: str, model: str | None = None,
                 base_url: str | None = None,
-                job_id: str | None = None) -> dict[str, Any]:
+                job_id: str | None = None,
+                tools_enabled: bool = True) -> dict[str, Any]:
         """Full chain with an LLM behind the capability gate (v0.2)."""
-        base = base_url or DEFAULT_BASE
-        client = OllamaClient(base_url=base, model=resolve_model(model, base))
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or DEFAULT_MODEL)
         cap = self.broker.issue(
             "crow-os/kernel",
             [{"method": "EXECUTE", "resource": "jobs.debugger"},
@@ -88,15 +92,40 @@ class Kernel:
         from .tools import ToolRunner
         worker = LLMWorker(self.broker, self.workflow, self.ledger, client,
                            tools=ToolRunner(self.broker, cap,
-                                            allow_private=self.allow_private_tools))
+                                            allow_private=self.allow_private_tools)
+                           if tools_enabled else None)
         job = worker.run(objective, cap, outputs=self.outputs, job_id=job_id)
         if job["status"] == "completed":
             self._persist_artifact(job["job_id"])
         return job
 
+    MAX_SPAWN_DEPTH = 2
+
+    def spawn_subagent(self, parent_job_id: str, agent_id: str,
+                       objective: str, base_url: str | None = None,
+                       model: str | None = None) -> dict[str, Any]:
+        """Spawn a sub-agent job from a parent job. The spawn itself is
+        attested (agent.spawned links parent -> child in the signed
+        ledger) and depth-capped, so delegation trees stay shallow
+        and auditable instead of recursing forever."""
+        root = parent_job_id
+        depth = self._spawn_depth.get(parent_job_id, 0) + 1
+        if depth > self.MAX_SPAWN_DEPTH:
+            raise ValueError(
+                f"spawn depth cap ({self.MAX_SPAWN_DEPTH}) reached")
+        child_id = self.workflow.create_job(
+            objective, chain=[agent_id, "governance"])
+        self._spawn_depth[child_id] = depth
+        self.ledger.append("crow-os/kernel", "agent.spawned", {
+            "parent_job_id": parent_job_id, "child_job_id": child_id,
+            "agent": agent_id, "depth": depth})
+        return self.run_agent(objective, agent_id, model=model,
+                              base_url=base_url, job_id=child_id)
+
     def run_agent(self, objective: str, agent_id: str,
                   model: str | None = None, base_url: str | None = None,
-                  job_id: str | None = None) -> dict[str, Any]:
+                  job_id: str | None = None,
+                  tools_enabled: bool = True) -> dict[str, Any]:
         """Run one user-created agent: its custom instructions are the
         system prompt; it receives capabilities only for its granted
         tools; governance still has the last word."""
@@ -107,13 +136,19 @@ class Kernel:
                    for t in agent.get("tools") or []]
         cap = self.broker.issue("crow-os/kernel", rights,
                                 ttl_seconds=900, rate_limit=20)
-        base = base_url or DEFAULT_BASE
-        client = OllamaClient(base_url=base, model=resolve_model(model or agent.get("model"), base))
+        client = OllamaClient(base_url=base_url or DEFAULT_BASE,
+                              model=model or agent.get("model") or DEFAULT_MODEL)
         from .tools import ToolRunner
         tools = ToolRunner(self.broker, cap,
-                           allow_private=self.allow_private_tools)             if "net.fetch" in (agent.get("tools") or []) else None
+                           allow_private=self.allow_private_tools) \
+            if tools_enabled and "net.fetch" in (agent.get("tools") or []) else None
+        spawner = None
+        if tools_enabled and "agent.spawn" in (agent.get("tools") or []):
+            spawner = lambda parent_id, sub_id, sub_obj: \
+                self.spawn_subagent(parent_id, sub_id, sub_obj,
+                                    base_url=base_url, model=model)
         worker = AgentWorker(self.broker, self.workflow, self.ledger,
-                             client, tools=tools)
+                             client, tools=tools, spawner=spawner)
         if job_id is None:
             job_id = self.workflow.create_job(
                 objective, chain=[agent_id, "governance"])

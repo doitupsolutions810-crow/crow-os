@@ -52,3 +52,7 @@ This branch was merged with main 786db364f033e06d593a36780d630bcbbbe8c059. This 
 The AVRONE importer now guards the full ledger verify/read/check/append critical section with a POSIX flock on a single-link no-follow sidecar file (and uses a process-local lock for test adapters without a ledger path). This prevents two independent Crow OS processes from both accepting the same AVRONE event during concurrent imports. New isolated coverage includes 8 competing threads and a hostile lock symlink; an added full-kernel two-process integration check remains pending in GitHub CI.
 
 **Isolated evidence:** 39/39 tests passed with Python 3.13.5 on a reconstructed module harness. **Integration:** 5 full-package tests await hosted CI. No real local Ollama model was queried.
+
+## Subsequent upstream reconciliation
+
+The integration branch now merges Crow OS upstream main `9083a1e8e1feb2daf48d0eaf2656dae0635d6a3d`, which adds device management, host-status display and sub-agent spawning. Those modules and new probe harnesses are retained from main. The hardened Ollama client remains the transport overlay to protect streaming and bound resources. Exact-head CI remains pending.

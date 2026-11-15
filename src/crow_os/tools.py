@@ -31,7 +31,8 @@ MAX_BYTES = 65_536
 EXCERPT_CHARS = 4_000
 TIMEOUT = 10.0
 
-TOOLS = ["net.fetch", "net.resolve", "fs.list", "fs.read", "fs.write"]
+TOOLS = ["net.fetch", "net.resolve", "fs.list", "fs.read", "fs.write",
+         "agent.spawn"]
 
 
 class ToolError(Exception):

@@ -17,15 +17,16 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, MODEL_FROM_ENV, LLMUnavailable, OllamaClient, pick_local_model
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
 
 
 class HomeServer:
-    def __init__(self, kernel: Kernel):
+    def __init__(self, kernel: Kernel, port: int | None = None):
         self.kernel = kernel
+        self.port = port
         self._threads: list[threading.Thread] = []
 
     # -- API ------------------------------------------------------------
@@ -34,13 +35,9 @@ class HomeServer:
         client = OllamaClient()
         try:
             h = client.health()
-            # The model a run with no explicit choice will actually use: the default when
-            # it is pulled (or set by CROW_OS_MODEL), else the best installed local model.
-            active = DEFAULT_MODEL if (h["model_present"] or MODEL_FROM_ENV) \
-                else (pick_local_model(h["models"]) or DEFAULT_MODEL)
             return {"reachable": True, "base": DEFAULT_BASE,
-                    "active": active, "default": DEFAULT_MODEL, "installed": h["models"],
-                    "active_installed": active in h["models"]}
+                    "active": DEFAULT_MODEL, "installed": h["models"],
+                    "active_installed": h["model_present"]}
         except LLMUnavailable as e:
             return {"reachable": False, "base": DEFAULT_BASE,
                     "active": DEFAULT_MODEL, "installed": [],
@@ -56,11 +53,13 @@ class HomeServer:
             "ledger": {"ok": verdict["ok"], "entries": verdict["entries"],
                        "errors": verdict["errors"][:5]},
             "jobs": len(self.kernel.workflow.jobs()),
+            "hosting": {"serving": self.port is not None, "port": self.port},
         }
 
     def start_run(self, objective: str, mode: str,
                   model: str | None = None,
-                  agent_id: str | None = None) -> dict[str, Any]:
+                  agent_id: str | None = None,
+                  tools_enabled: bool = True) -> dict[str, Any]:
         # One wiring path for both modes: the job is created up front
         # (so the caller always gets its id immediately and the run is
         # in the ledger even if the server dies), then the KERNEL's own
@@ -71,20 +70,18 @@ class HomeServer:
             job_id = self.kernel.workflow.create_job(
                 objective, chain=[agent_id, "governance"])
             target = lambda: self.kernel.run_agent(  # noqa: E731
-                objective, agent_id, model=model, job_id=job_id)
+                objective, agent_id, model=model, job_id=job_id,
+                tools_enabled=tools_enabled)
             t = threading.Thread(target=self._guarded, args=(job_id, target), daemon=True)
             t.start()
             self._threads.append(t)
             return {"started": True, "mode": "agent", "agent": agent["id"],
                     "job": self.kernel.workflow.get(job_id)}
         if mode == "auto":
-            info = self.model_info()
-            # reachable with no usable model (nothing pulled yet) runs the demo instead of
-            # failing every job on a model that is not there; an explicit model is honored
-            mode = "llm" if info["reachable"] and (model or info["active_installed"]) else "demo"
+            mode = "llm" if self.model_info()["reachable"] else "demo"
         job_id = self.kernel.workflow.create_job(objective)
         if mode == "llm":
-            target = lambda: self.kernel.run_llm(objective, model=model, job_id=job_id)  # noqa: E731
+            target = lambda: self.kernel.run_llm(objective, model=model, job_id=job_id, tools_enabled=tools_enabled)  # noqa: E731
         else:
             target = lambda: self.kernel.run_demo(objective, job_id=job_id)  # noqa: E731
         t = threading.Thread(target=self._guarded, args=(job_id, target), daemon=True)
@@ -150,6 +147,13 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/devices":
+                info = home.model_info()
+                self._json(200, {"devices": home.kernel.devices.list(
+                    {"reachable": info["reachable"],
+                     "installed": info["installed"]}),
+                    "hosting": {"serving": home.port is not None,
+                                "port": home.port}})
             elif u.path == "/api/agents":
                 self._json(200, {"agents": home.kernel.agents.list()})
             elif u.path == "/api/fs":
@@ -210,6 +214,46 @@ def make_handler(home: HomeServer):
                 except AgentError as e:
                     return self._json(400, {"error": str(e)})
                 return self._json(201, {"agent": agent})
+            if u.path == "/api/devices":
+                from .devices import DeviceError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    device = home.kernel.devices.register(
+                        payload.get("name"), payload.get("kind", "device"),
+                        payload.get("address", ""))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except DeviceError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(201, {"device": device})
+            if u.path == "/api/spawn":
+                from .agents import AgentError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    agent_id = payload.get("agent")
+                    objective = payload.get("objective")
+                    parent = payload.get("parent")
+                    if not isinstance(objective, str) or not objective.strip():
+                        return self._json(400, {"error": "objective must be a non-empty string"})
+                    home.kernel.agents.get(agent_id)  # validate first
+                    child_id = home.kernel.workflow.create_job(
+                        objective, chain=[agent_id, "governance"])
+                    home.kernel.ledger.append("crow-os/kernel", "agent.spawned", {
+                        "parent_job_id": parent, "child_job_id": child_id,
+                        "agent": agent_id, "depth": 1})
+                    t = threading.Thread(
+                        target=home._guarded,
+                        args=(child_id, lambda: home.kernel.run_agent(
+                            objective, agent_id, job_id=child_id)),
+                        daemon=True)
+                    t.start(); home._threads.append(t)
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except AgentError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(202, {"started": True, "job_id": child_id})
             if u.path != "/api/run":
                 return self._json(404, {"error": "not found"})
             try:
@@ -231,10 +275,12 @@ def make_handler(home: HomeServer):
             agent_id = payload.get("agent")
             if agent_id is not None and not isinstance(agent_id, str):
                 return self._json(400, {"error": "agent must be a string"})
+            tools_enabled = payload.get("tools", True) is not False
             from .agents import AgentError
             try:
                 self._json(202, home.start_run(objective, mode, model=model,
-                                               agent_id=agent_id))
+                                               agent_id=agent_id,
+                                               tools_enabled=tools_enabled))
             except AgentError as e:
                 return self._json(400, {"error": str(e)})
 
@@ -275,7 +321,7 @@ def make_handler(home: HomeServer):
 
 
 def serve(kernel: Kernel, port: int) -> int:
-    home = HomeServer(kernel)
+    home = HomeServer(kernel, port=port)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(home))
     print(f"Crow OS Home Screen: http://127.0.0.1:{port}  (home: {kernel.home})")
     try:

@@ -20,14 +20,14 @@ from .tools import ToolError, ToolRunner
 from .workflow import Workflow
 
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+_DELEGATE_RE = re.compile(r"^delegate to ([a-z0-9][a-z0-9\-]*):\s*(.+)$", re.I)
 
 PROMPTS = {
     "debugger": ("You are the debugger/planner in a 4-role chain. "
                  "Return a short plan with numbered acceptance criteria."),
     "coder": ("You are the coder in a 4-role chain. "
               "Return only the artifact (code or text) implementing the plan. "
-              "The FIRST line of your answer must be the plan reference line, "
-              "copied exactly as given (as a comment if the artifact is code)."),
+              "Include the plan reference line exactly as given."),
 }
 
 
@@ -89,17 +89,6 @@ class LLMWorker:
                 f"Plan reference line: plan:{job_id}",
                 on_token=(lambda t: outputs[job_id].__setitem__(
                     "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
-            ref = f"plan:{job_id}"
-            if artifact.strip() and ref not in artifact:
-                # Small local models (3B) often drop the reference line. Ask once more,
-                # with the same gate already held; the tester's check stays exact.
-                self.ledger.append("crow-os/worker", "coder.repair", {
-                    "job_id": job_id, "reason": "plan reference line missing"})
-                artifact = self.client.chat_stream(
-                    PROMPTS["coder"],
-                    f"Your previous answer was missing the required first line.\n"
-                    f"First line, exactly: {ref}\nThen the full artifact again.\n\n"
-                    f"Previous answer:\n{artifact[:20000]}")
             state = self.workflow.report(job_id, "coder", bool(artifact.strip()),
                                          f"artifact chars={len(artifact)}")
             if outputs is not None:
@@ -115,9 +104,6 @@ class LLMWorker:
             state = self.workflow.report(job_id, "tester", all(checks),
                                          f"criteria {sum(checks)}/{len(checks)}")
             if state["status"] == "failed":
-                # say why: a failed job with no error left `crow run` printing nothing useful
-                state["error"] = ("tester: artifact does not contain the plan reference line "
-                                  f"{ref!r}" if not checks[0] else "tester: empty artifact")
                 return state
 
             # governance (deterministic: ledger must verify)
@@ -146,12 +132,14 @@ class AgentWorker:
     """
 
     def __init__(self, broker: Broker, workflow: Workflow, ledger: Ledger,
-                 client: OllamaClient, tools: ToolRunner | None = None):
+                 client: OllamaClient, tools: ToolRunner | None = None,
+                 spawner=None):
         self.broker = broker
         self.workflow = workflow
         self.ledger = ledger
         self.client = client
         self.tools = tools
+        self.spawner = spawner  # callable(parent_job_id, agent_id, objective) -> job
 
     def run(self, objective: str, agent: dict[str, Any], cap: dict[str, Any],
             outputs: dict | None = None,
@@ -190,6 +178,23 @@ class AgentWorker:
                 outputs[job_id]["agent"] = agent["name"]
             if state["status"] == "failed":
                 return state
+            # Delegation: "delegate to <agent-id>: <objective>" lines in
+            # the objective spawn sub-agents — only with the agent.spawn
+            # grant, only through the kernel's spawner (which attests
+            # agent.spawned and enforces the depth cap).
+            if self.spawner is not None and \
+                    "agent.spawn" in (agent.get("tools") or []):
+                subs = []
+                for line in objective.splitlines():
+                    m = _DELEGATE_RE.match(line.strip())
+                    if m and len(subs) < 3:
+                        child = self.spawner(job_id, m.group(1),
+                                             m.group(2).strip())
+                        subs.append({"agent": m.group(1),
+                                     "job_id": child["job_id"],
+                                     "status": child["status"]})
+                if subs and outputs is not None:
+                    outputs[job_id]["subagents"] = subs
             role = "governance"
             verdict = self.ledger.verify()
             self.workflow.report(job_id, "governance", verdict["ok"],
