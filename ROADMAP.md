@@ -113,21 +113,29 @@ audit failure it prevents.
   "Developer panels" in Settings (⚙️, persisted in localStorage).
   Nothing was removed — it all still runs on the backend.
 
-## v0.9.1: local Ollama works out of the box (shipped)
+## v0.10 — HUD, devices & sub-agents (shipped)
 
-- **Proxies.** Calls to a loopback Ollama skip HTTP(S)_PROXY. With a proxy in the environment and no NO_PROXY, every 127.0.0.1 call went to the proxy. That made a running Ollama look unreachable and left 4 unit tests and 18 probes red.
-- **Model choice.**
-  - The built-in default (qwen2.5-coder:32b) is replaced by the best installed chat model when it isn't pulled. Families are preferred in this order: qwen2.5-coder, qwen3-coder, qwen2.5, qwen3, llama3.x, gemma3, mistral, phi. Embedding models are skipped.
-  - A model chosen explicitly (argument, agent setting or CROW_OS_MODEL) is never swapped. If it isn't installed, the run fails closed with Ollama's own reason.
-  - Auto mode runs the demo when Ollama is up but has no chat model.
-- **Ollama's own error text** ("model 'x' not found", mid-stream "llama runner process has terminated") now reaches the job error. Before, it read "unreachable: HTTP Error 404".
-- **Stream robustness.** A non-object JSON line, a truncated stream or an HTML /api/tags fails closed with LLMUnavailable, never AttributeError. The stream stops at `done`.
-- **OLLAMA_HOST** is accepted in Ollama's own forms: `host:port`, `0.0.0.0`, or a quoted value.
-- **Coder repair.** When the coder drops the plan reference line, it is asked once more and a `coder.repair` entry is logged in the ledger. The tester's exact check is unchanged. A failed tester now gives its reason in the job error. Before, `crow run` printed a failed job with no error.
-- **`python -m crow_os`** now works as the README shows; there was no `__main__`.
-- **Tests:** tests/test_v09_local_ollama.py (19, plus 1 live test gated by CROW_OS_LIVE_OLLAMA=1) and probes/edge_harness11.py (W1–W8, a hostile or half-broken Ollama). Live run on qwen2.5:3b: the full 4-role chain completed and the signed ledger verified.
+Upgrades integrated from across the account's repos, re-analyzed at
+40 repos: sub-agent spawning (swarm-vm-runner / Avrone's squad
+spawning), a control-room HUD (avrone-control-room), device &
+hosting awareness (the daemon's hosting model).
 
-## v0.10 — fleet
+- **Sub-agent spawning**: agents granted `agent.spawn` can delegate
+  with "delegate to <agent-id>: <objective>" lines. Every spawn is
+  attested (`agent.spawned` links parent -> child in the signed
+  ledger), depth-capped at 2, max 3 per run; children run their own
+  [agent, governance] chains. POST /api/spawn spawns directly.
+- **Devices & hosting**: the local device profile is computed
+  (hostname, platform, CPUs, live Ollama state); users register
+  other devices into /system/devices.json — shown as registered,
+  never pretend-verified. GET/POST /api/devices; status reports
+  hosting (serving port).
+- **Tooling HUD** on the chat surface: this device + Ollama state,
+  hosting state, a Tools master switch wired into every new run
+  (off = agents run with zero tool calls), and a live count of
+  agents at work / active runs.
+
+## v0.11 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
