@@ -174,9 +174,10 @@ class AgentRegistry:
         # lack these optional fields; retain them with least-privilege defaults.
         agent.setdefault("created", 0.0)
         agent.setdefault("tools", [])
-        if (not isinstance(agent.get("created"), (int, float)) or
-                isinstance(agent.get("created"), bool) or
-                not math.isfinite(agent["created"]) or
+        created = agent["created"]
+        if (type(created) not in (int, float) or
+                not 0 <= created <= 10_000_000_000_000 or
+                (type(created) is float and not math.isfinite(created)) or
                 not isinstance(agent.get("tools"), list) or
                 any(not isinstance(t, str) or t not in TOOLS for t in agent["tools"]) or
                 (agent.get("model") is not None and
