@@ -92,11 +92,10 @@ class OllamaHardeningTests(unittest.TestCase):
             with self.assertRaisesRegex(LLMUnavailable, "completion"):
                 c.chat_stream("s", "u")
 
-    def test_data_after_terminal_fails(self):
+    def test_terminal_frame_ignores_trailing_data_for_v09_compatibility(self):
         with server(frames=[{"message": {"content": "a"}, "done": True},
                             {"message": {"content": "b"}, "done": True}]) as (c, _):
-            with self.assertRaisesRegex(LLMUnavailable, "after terminal"):
-                c.chat_stream("s", "u")
+            self.assertEqual(c.chat_stream("s", "u"), "a")
 
     def test_non_dict_stream_fails(self):
         with server(frames=[["bad"]]) as (c, _):
@@ -135,10 +134,10 @@ class OllamaHardeningTests(unittest.TestCase):
             self.assertFalse(c.health()["model_present"])
             self.assertIn("small:latest", c.health()["models"])
 
-    def test_tags_malformed_fails(self):
+    def test_malformed_tags_are_empty_for_v09_compatibility(self):
         with server(tags={"models": {"oops": True}}) as (c, _):
-            with self.assertRaisesRegex(LLMUnavailable, "model listing"):
-                c.health()
+            self.assertFalse(c.health()["model_present"])
+            self.assertEqual(c.health()["models"], [])
 
     def test_nonstream_chat(self):
         with server(chat={"message": {"content": "done"}, "done": True}) as (c, handler):
@@ -157,7 +156,7 @@ class OllamaHardeningTests(unittest.TestCase):
 
     def test_http_error_fails(self):
         with server(status=500) as (c, _):
-            with self.assertRaisesRegex(LLMUnavailable, "HTTP status 500"):
+            with self.assertRaisesRegex(LLMUnavailable, "HTTP 500"):
                 c.chat("s", "u")
 
     def test_bare_ollama_host_normalized(self):
