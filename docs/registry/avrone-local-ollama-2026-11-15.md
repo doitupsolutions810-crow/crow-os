@@ -119,3 +119,7 @@ Release decision remains **HOLD**.
 ## Live-agent hardening reconnaissance — upstream v0.12
 
 Merged upstream `28c14838505920f1fa6c8c412970419c6a6de90e` as an independent parent. Kept the newer custom-agent avatar UI, plugin catalog, host status and delegation runtime from main; retained hardened Ollama and AVRONE evidence adapters. A new agent security/test round follows on this merged source. No live local Mac Ollama session available for direct control.
+
+## Chat runtime compatibility reconciliation — ffc3d379466f82bb43249627abc5597563892c72
+
+The branch merged newer Crow OS main carrying transcript export and additional probe harnesses. The new HTTP intake safeguards were applied on top of main's server, not by overwriting its transcript endpoints; main's CLI was extended with the existing Ollama smoke and AVRONE evidence commands without losing transcript support. Agent naming, custom instructions, avatar choices, live streaming and device plugins were preserved from upstream. Full branch CI remains required.

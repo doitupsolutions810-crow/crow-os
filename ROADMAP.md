@@ -148,7 +148,17 @@ are verified / built-in / user-asserted, never faked), Bot Computer
 ("the one computer your agents share" — real disk and home sizes),
 Manage your devices, Permissions (capability grants per agent).
 
-## v0.12 — fleet
+## v0.12 — output the chats (shipped)
+
+- Every job exports as a Markdown transcript — the user's message,
+  each agent's output, tool invocations, sub-agent links, steps and
+  the governance verdict — assembled from the workflow record, the
+  outputs sink and the signed ledger, so the export is what was
+  attested. GET /api/jobs/<id>/transcript and `crow transcript
+  <job_id>`; transcripts stay complete after a restart by falling
+  back to the persisted artifact in Documents.
+
+## v0.13 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 

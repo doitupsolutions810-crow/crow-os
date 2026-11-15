@@ -118,7 +118,7 @@ class HomeServer:
 def make_handler(home: HomeServer):
     class Handler(BaseHTTPRequestHandler):
         def _payload(self) -> dict[str, Any]:
-            """Bound JSON POST intake before reading; no list/null payloads."""
+            """Bound JSON POST intake, rejecting arrays/null and oversized bodies."""
             raw_length = self.headers.get("Content-Length")
             try:
                 length = int(raw_length) if raw_length is not None else 0
@@ -155,6 +155,18 @@ def make_handler(home: HomeServer):
                 self._json(200, home.status())
             elif u.path == "/api/model":
                 self._json(200, home.model_info())
+            elif u.path.startswith("/api/jobs/") and u.path.endswith("/transcript"):
+                job_id = u.path.split("/")[3]
+                try:
+                    md = home.kernel.transcript(job_id)
+                except KeyError:
+                    return self._json(404, {"error": "job not found"})
+                body = md.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif u.path.startswith("/api/jobs/") and u.path.endswith("/stream"):
                 self._stream(u.path.split("/")[3])
             elif u.path == "/api/jobs":

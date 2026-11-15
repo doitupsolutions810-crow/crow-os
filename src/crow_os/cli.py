@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     gsub.add_parser("list")
     s_ = sub.add_parser("serve", help="Crow OS Home Screen (web UI backed by the kernel)")
     s_.add_argument("--port", type=int, default=8787)
+    t_ = sub.add_parser("transcript", help="export a job's chat + agent outputs (Markdown)")
+    t_.add_argument("job_id")
     a = p.parse_args(argv)
     home = Path(a.home)
     if a.cmd == "ollama-check":
@@ -90,6 +92,14 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{ag['id']}  {ag['name']}  tools={ag['tools']}")
         except AgentError as e:
             print(f"agent error: {e}")
+            return 1
+        return 0
+    if a.cmd == "transcript":
+        kernel = Kernel(home)
+        try:
+            print(kernel.transcript(a.job_id), end="")
+        except KeyError:
+            print(f"no such job: {a.job_id}")
             return 1
         return 0
     if a.cmd == "run":
