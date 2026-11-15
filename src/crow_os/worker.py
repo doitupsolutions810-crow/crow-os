@@ -184,6 +184,9 @@ class AgentWorker:
             # agent.spawned and enforces the depth cap).
             if self.spawner is not None and \
                     "agent.spawn" in (agent.get("tools") or []):
+                # After the agent step, a denied delegation is a governance
+                # failure, not a second report on the already finished role.
+                role = "governance"
                 subs = []
                 for line in objective.splitlines():
                     m = _DELEGATE_RE.match(line.strip())
@@ -192,13 +195,19 @@ class AgentWorker:
                         # role, depth cap) must not kill the parent
                         # job: record the refusal and carry on to
                         # governance.
+                        # The agent definition is NOT authority. Check the
+                        # signed, scoped TOOL capability for every actual
+                        # spawn before starting a child. Denials fail closed.
+                        self.broker.authorize(cap, "TOOL", "agent.spawn")
                         try:
                             child = self.spawner(job_id, m.group(1),
                                                  m.group(2).strip())
                             subs.append({"agent": m.group(1),
                                          "job_id": child["job_id"],
                                          "status": child["status"]})
-                        except Exception as e:  # noqa: BLE001 - fail soft
+                        except Exception as e:  # noqa: BLE001 - invalid child
+                            # A missing/depth-limited child is recorded as an
+                            # error without inventing a successful child job.
                             subs.append({"agent": m.group(1),
                                          "error": f"{type(e).__name__}: {e}"})
                 if subs and outputs is not None:
