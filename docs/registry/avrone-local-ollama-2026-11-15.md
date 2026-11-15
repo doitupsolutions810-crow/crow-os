@@ -87,3 +87,31 @@ package (worker, server, device runtime), multi-process signed ledger,
 and Python 3.11 / 3.12 CI have not been directly executed in the sandbox.
 
 Release decision: **HOLD** until exact-head CI and operator-local model smoke.
+
+
+## Multiprocess evidence verification — 2026-11-15
+
+| Resource | Exact claim and scope | Outcome |
+| --- | --- | --- |
+| [File-backed process test](../../tests/test_avrone_multiprocess_edges.py) | Eight Python spawn processes imported 15 distinct events from one source into a common file-backed ledger adapter; exactly one process admitted each event | Passed on local Python 3.13.5 |
+| [Replay under independent processes](../../tests/test_avrone_multiprocess_edges.py) | Two fresh processes replayed a previous four-event import, yielding zero new admissions and eight duplicate observations | Passed |
+| [Unsafe filesystem locking](../../tests/test_avrone_multiprocess_edges.py) | Hardlink and directory at .avrone-import.lock fail closed without appending | Passed |
+| [Corrupt predecessor](../../tests/test_avrone_multiprocess_edges.py) | A prior malformed JSON line in the file-backed test ledger blocks new evidence | Passed |
+| [Source implementation](../../src/crow_os/avrone.py) | Cross-process flock and preflight contradiction checking; marker-aware 100-post budget | Reviewed against committed source |
+| [GitHub CI](https://github.com/doitupsolutions810-crow/crow-os/pull/1/checks) | Full Crow OS v0.10, existing probe harnesses, 3.11/3.12 signed ledger and Ollama integration | Awaiting exact-head runner completion |
+
+Local executable command in the isolated Crow OS modules:
+\`PYTHONPATH=src python -m unittest discover -s tests -q\`.
+Result: **61 tests, 61 passed, 12.766 seconds, Python 3.13.5**.
+Previous baseline: 39/39; this round contributed 22 new individual
+regression tests, including one with 300 deterministic data-mutation
+iterations and one with eight independent spawn processes.
+
+The file-backed process adapter is NOT Crow OS's actual signed Ledger;
+its purpose is to test the import lock independently. The full-kernel
+two-process test already in tests/test_crow_ollama_integration.py must
+pass in GitHub CI before claiming signed-ledger multi-process success.
+No user's physical Ollama service or model was accessed.
+No production rollout or merge was performed.
+
+Release decision remains **HOLD**.
