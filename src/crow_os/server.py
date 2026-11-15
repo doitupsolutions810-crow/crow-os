@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, MODEL_FROM_ENV, LLMUnavailable, OllamaClient, pick_local_model
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
@@ -35,9 +35,13 @@ class HomeServer:
         client = OllamaClient()
         try:
             h = client.health()
+            # The model a run with no explicit choice will actually use: the default when
+            # it is pulled (or set by CROW_OS_MODEL), else the best installed local model.
+            active = DEFAULT_MODEL if (h["model_present"] or MODEL_FROM_ENV) \
+                else (pick_local_model(h["models"]) or DEFAULT_MODEL)
             return {"reachable": True, "base": DEFAULT_BASE,
-                    "active": DEFAULT_MODEL, "installed": h["models"],
-                    "active_installed": h["model_present"]}
+                    "active": active, "default": DEFAULT_MODEL, "installed": h["models"],
+                    "active_installed": active in h["models"]}
         except LLMUnavailable as e:
             return {"reachable": False, "base": DEFAULT_BASE,
                     "active": DEFAULT_MODEL, "installed": [],
@@ -78,7 +82,10 @@ class HomeServer:
             return {"started": True, "mode": "agent", "agent": agent["id"],
                     "job": self.kernel.workflow.get(job_id)}
         if mode == "auto":
-            mode = "llm" if self.model_info()["reachable"] else "demo"
+            info = self.model_info()
+            # reachable with no usable model (nothing pulled yet) runs the demo instead of
+            # failing every job on a model that is not there; an explicit model is honored
+            mode = "llm" if info["reachable"] and (model or info["active_installed"]) else "demo"
         job_id = self.kernel.workflow.create_job(objective)
         if mode == "llm":
             target = lambda: self.kernel.run_llm(objective, model=model, job_id=job_id, tools_enabled=tools_enabled)  # noqa: E731
@@ -116,6 +123,17 @@ class HomeServer:
 
 def make_handler(home: HomeServer):
     class Handler(BaseHTTPRequestHandler):
+        def _read_obj(self, length: int) -> dict:
+            """Request body as a JSON object. A list, a string, null, a negative
+            length (rfile.read(-1) would block the handler thread until the client
+            hangs up) or a body over 1 MiB raise ValueError -> clean 400."""
+            if length < 0 or length > 1 << 20:
+                raise ValueError("bad Content-Length")
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError("body must be a JSON object")
+            return payload
+
         def _json(self, code: int, obj: Any) -> None:
             body = json.dumps(obj).encode()
             self.send_response(code)
@@ -215,7 +233,7 @@ def make_handler(home: HomeServer):
                 from .agents import AgentError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._read_obj(length)
                     agent = home.kernel.agents.create(
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
@@ -230,7 +248,7 @@ def make_handler(home: HomeServer):
                 from .plugins import PluginError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._read_obj(length)
                     home.kernel.plugins.set_asserted(
                         payload.get("id"), bool(payload.get("connected")))
                 except (ValueError, json.JSONDecodeError):
@@ -242,7 +260,7 @@ def make_handler(home: HomeServer):
                 from .devices import DeviceError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._read_obj(length)
                     device = home.kernel.devices.register(
                         payload.get("name"), payload.get("kind", "device"),
                         payload.get("address", ""))
@@ -255,7 +273,7 @@ def make_handler(home: HomeServer):
                 from .agents import AgentError
                 try:
                     length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._read_obj(length)
                     agent_id = payload.get("agent")
                     objective = payload.get("objective")
                     parent = payload.get("parent")
@@ -282,7 +300,7 @@ def make_handler(home: HomeServer):
                 return self._json(404, {"error": "not found"})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._read_obj(length)
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "body must be JSON"})
             objective = payload.get("objective")
