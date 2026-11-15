@@ -45,8 +45,10 @@ class LLMWorker:
             self.broker.authorize(cap, "EXECUTE", "jobs.debugger")
             plan = self.client.chat(PROMPTS["debugger"],
                                     f"Objective: {objective}\nJob: {job_id}")
-            self.workflow.report(job_id, "debugger", True,
-                                 f"plan chars={len(plan)}")
+            state = self.workflow.report(job_id, "debugger", True,
+                                         f"plan chars={len(plan)}")
+            if state["status"] == "failed":
+                return state
 
             # coder (LLM)
             role = "coder"
@@ -55,14 +57,18 @@ class LLMWorker:
                 PROMPTS["coder"],
                 f"Objective: {objective}\nPlan:\n{plan}\n"
                 f"Plan reference line: plan:{job_id}")
-            self.workflow.report(job_id, "coder", bool(artifact.strip()),
-                                 f"artifact chars={len(artifact)}")
+            state = self.workflow.report(job_id, "coder", bool(artifact.strip()),
+                                         f"artifact chars={len(artifact)}")
+            if state["status"] == "failed":
+                return state
 
             # tester (deterministic: criteria actually checked)
             role = "tester"
             checks = [f"plan:{job_id}" in artifact, len(artifact.strip()) > 0]
-            self.workflow.report(job_id, "tester", all(checks),
-                                 f"criteria {sum(checks)}/{len(checks)}")
+            state = self.workflow.report(job_id, "tester", all(checks),
+                                         f"criteria {sum(checks)}/{len(checks)}")
+            if state["status"] == "failed":
+                return state
 
             # governance (deterministic: ledger must verify)
             role = "governance"

@@ -124,3 +124,76 @@ class KernelLLMTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Round10RegressionTests(unittest.TestCase):
+    """Regressions for the edge-harness probes L7 / C2 / C7."""
+
+    def test_concurrent_appends_keep_chain(self):
+        import threading
+        ledger = Ledger(Path(tempfile.mkdtemp()) / "l.jsonl")
+        threads = [threading.Thread(target=ledger.append, args=("t", "x", {"n": i}))
+                   for i in range(20)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        v = ledger.verify()
+        self.assertTrue(v["ok"], v)
+        self.assertEqual(v["entries"], 20)
+
+    def test_child_cannot_outlive_parent(self):
+        import time
+        broker = Broker(SECRET)
+        parent = broker.issue("a", [{"method": "GET", "resource": "/x"}],
+                              ttl_seconds=0.05)
+        child = broker.issue("a", [{"method": "GET", "resource": "/x"}],
+                             parent=parent, ttl_seconds=300)
+        self.assertLessEqual(child["expires"], parent["expires"])
+        time.sleep(0.07)
+        from crow_os.capabilities import CapabilityError
+        with self.assertRaises(CapabilityError):
+            broker.authorize(child, "GET", "/x")
+
+    def test_revocation_shared_via_state_file(self):
+        home = Path(tempfile.mkdtemp())
+        sp = home / "broker_state.json"
+        b1 = Broker(SECRET, state_path=sp)
+        cap = b1.issue("a", [{"method": "GET", "resource": "/x"}])
+        b1.revoke(cap["id"])
+        b2 = Broker(SECRET, state_path=sp)
+        from crow_os.capabilities import CapabilityError
+        with self.assertRaises(CapabilityError):
+            b2.authorize(cap, "GET", "/x")
+
+    def test_tester_failure_stops_chain_without_exception(self):
+        # Regression (stub probe S3): a failed tester report ends the job;
+        # the worker must return the failed job, not raise WorkflowError
+        # by reporting governance on a terminal job.
+        class NoRefStub(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                content = "artifact with no reference line"
+                out = json.dumps({"message": {"content": content}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+            def log_message(self, *a):
+                pass
+
+        srv = HTTPServer(("127.0.0.1", 0), NoRefStub)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{srv.server_address[1]}"
+            client = OllamaClient(base_url=url, model="stub")
+            ledger = Ledger(Path(tempfile.mkdtemp()) / "l.jsonl")
+            broker = Broker(SECRET)
+            wf = Workflow(ledger)
+            cap = broker.issue("k", [{"method": "EXECUTE", "resource": "jobs.debugger"},
+                                     {"method": "EXECUTE", "resource": "jobs.coder"}],
+                               rate_limit=10)
+            job = LLMWorker(broker, wf, ledger, client).run("x", cap)
+            self.assertEqual(job["status"], "failed")
+            self.assertEqual(job["step"], 2)  # died at tester, governance never ran
+        finally:
+            srv.shutdown()

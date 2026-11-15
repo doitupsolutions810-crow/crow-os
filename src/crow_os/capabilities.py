@@ -14,8 +14,10 @@ Ed25519 signer behind the same issue/verify contract.
 from __future__ import annotations
 
 import copy
+import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from .signers import HmacSigner, Signer
@@ -26,7 +28,8 @@ class CapabilityError(Exception):
 
 
 class Broker:
-    def __init__(self, secret: bytes | None = None, *, signer: Signer | None = None):
+    def __init__(self, secret: bytes | None = None, *, signer: Signer | None = None,
+                 state_path: Path | None = None):
         if signer is None:
             if secret is None:
                 raise CapabilityError("Broker needs a secret or a signer")
@@ -36,6 +39,27 @@ class Broker:
         self._lineage: dict[str, str] = {}   # cap_id -> root_id
         self._usage: dict[str, int] = {}     # root_id -> executions
         self._root_limits: dict[str, int] = {}  # root_id -> lineage rate limit
+        # Optional file-backed state: revocations, lineage and usage are
+        # shared by every broker opened on the same home, so a revocation
+        # survives restarts and reaches other processes (probe C7).
+        self._state_path = Path(state_path) if state_path else None
+        if self._state_path and self._state_path.exists():
+            saved = json.loads(self._state_path.read_text())
+            self._revoked = set(saved.get("revoked", []))
+            self._lineage = dict(saved.get("lineage", {}))
+            self._usage = {k: int(v) for k, v in saved.get("usage", {}).items()}
+            self._root_limits = {k: int(v) for k, v in saved.get("root_limits", {}).items()}
+
+    def _persist(self) -> None:
+        if not self._state_path:
+            return
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.write_text(json.dumps({
+            "revoked": sorted(self._revoked),
+            "lineage": self._lineage,
+            "usage": self._usage,
+            "root_limits": self._root_limits,
+        }, sort_keys=True) + "\n")
 
     def _sign(self, cap: dict[str, Any]) -> str:
         body = {k: v for k, v in cap.items() if k != "sig"}
@@ -61,17 +85,23 @@ class Broker:
         else:
             root = cap_id
             self._root_limits[root] = rate_limit
+        expires = time.time() + ttl_seconds
+        if parent is not None:
+            # Attenuation must not amplify duration either: a child can
+            # never outlive its parent (probe C2).
+            expires = min(expires, parent["expires"])
         cap = {
             "id": cap_id,
             "root": root,
             "parent_id": parent["id"] if parent else None,
             "subject": subject,
             "rights": copy.deepcopy(rights),
-            "expires": time.time() + ttl_seconds,
+            "expires": expires,
             "rate_limit": rate_limit,
         }
         cap["sig"] = self._sign(cap)
         self._lineage[cap_id] = root
+        self._persist()
         return cap
 
     def _check_signature(self, cap: dict[str, Any]) -> None:
@@ -81,6 +111,7 @@ class Broker:
 
     def revoke(self, cap_id: str) -> None:
         self._revoked.add(cap_id)
+        self._persist()
 
     def _lineage_revoked(self, cap: dict[str, Any]) -> bool:
         return cap["id"] in self._revoked or cap["root"] in self._revoked
@@ -98,4 +129,5 @@ class Broker:
         if self._usage.get(root, 0) >= self._root_limits.get(root, cap["rate_limit"]):
             raise CapabilityError("rate limit (lineage)")
         self._usage[root] = self._usage.get(root, 0) + 1
+        self._persist()
         return {"status": "ok", "capability": cap["id"], "method": method, "resource": resource}

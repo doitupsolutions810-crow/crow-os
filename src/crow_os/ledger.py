@@ -9,8 +9,10 @@ Fixes the failure modes found in the attested-history audit:
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -31,24 +33,30 @@ class LedgerError(Exception):
 class Ledger:
     def __init__(self, path: Path):
         self.path = Path(path)
+        self._lock = threading.Lock()
 
     def append(self, source: str, kind: str, raw: dict[str, Any]) -> dict[str, Any]:
-        entries = self.read()
-        prev = entries[-1] if entries else None
-        entry = {
-            "seq": (prev["seq"] + 1) if prev else 0,
-            "ts": time.time(),
-            "source": source,
-            "kind": kind,
-            "prev_hash": prev["digest"] if prev else None,
-            "raw": raw,
-            "digest": "",
-        }
-        entry["digest"] = _digest({k: v for k, v in entry.items() if k != "digest"})
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a") as f:
-            f.write(_canon(entry) + "\n")
-        return entry
+        # Read-modify-write must be atomic: without the lock, concurrent
+        # appends read the same tail and mint duplicate seqs (probe L7).
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a+") as f:
+                fcntl.flock(f, fcntl.LOCK_EX)
+                entries = self.read()
+                prev = entries[-1] if entries else None
+                entry = {
+                    "seq": (prev["seq"] + 1) if prev else 0,
+                    "ts": time.time(),
+                    "source": source,
+                    "kind": kind,
+                    "prev_hash": prev["digest"] if prev else None,
+                    "raw": raw,
+                    "digest": "",
+                }
+                entry["digest"] = _digest({k: v for k, v in entry.items() if k != "digest"})
+                f.write(_canon(entry) + "\n")
+                f.flush()
+                return entry
 
     def read(self) -> list[dict[str, Any]]:
         if not self.path.exists():

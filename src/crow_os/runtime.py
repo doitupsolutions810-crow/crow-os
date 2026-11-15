@@ -31,7 +31,8 @@ class Kernel:
         if not secret_path.exists():
             secret_path.write_bytes(hashlib.sha256(
                 f"crow-os:{self.home.resolve()}".encode()).digest())
-        self.broker = Broker(secret_path.read_bytes())
+        self.broker = Broker(secret_path.read_bytes(),
+                             state_path=self.home / "broker_state.json")
         self.workflow = Workflow(self.ledger)
 
     def run_llm(self, objective: str, model: str | None = None,
