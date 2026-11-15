@@ -160,6 +160,10 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/identity":
+                self._json(200, home.kernel.identity_info())
+            elif u.path == "/api/peers":
+                self._json(200, {"peers": home.kernel.peers.list()})
             elif u.path == "/api/routines":
                 self._json(200, {"routines": home.kernel.routines.list()})
             elif u.path.startswith("/api/agents/") and u.path.endswith("/memory"):
@@ -229,6 +233,13 @@ def make_handler(home: HomeServer):
                     home.kernel.routines.delete(u.path.rsplit("/", 1)[-1])
                     return self._json(200, {"deleted": True})
                 except RoutineError as e:
+                    return self._json(404, {"error": str(e)})
+            if u.path.startswith("/api/peers/"):
+                from .federation import FederationError
+                try:
+                    home.kernel.peers.remove(u.path.rsplit("/", 1)[-1])
+                    return self._json(200, {"deleted": True})
+                except FederationError as e:
                     return self._json(404, {"error": str(e)})
             if u.path.startswith("/api/agents/"):
                 from .agents import AgentError
@@ -304,6 +315,48 @@ def make_handler(home: HomeServer):
                 except AgentError as e:
                     return self._json(400, {"error": str(e)})
                 return self._json(202, {"started": True, "job_id": parent_id})
+            if u.path == "/api/peers":
+                from .federation import FederationError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    peer = home.kernel.peers.register(
+                        payload.get("name"), payload.get("url"),
+                        payload.get("pubkey"))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except FederationError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(201, {"peer": peer})
+            if u.path == "/api/federation/dispatch":
+                from .federation import FederationError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    reply = home.kernel.federation_dispatch(
+                        payload.get("peer"), payload.get("agent"),
+                        payload.get("objective"))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except FederationError as e:
+                    return self._json(502, {"error": str(e)})
+                return self._json(200, reply)
+            if u.path == "/api/federation/run":
+                from .federation import FederationError, verify_incoming
+                from .agents import AgentError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    peer = verify_incoming(home.kernel.peers, payload)
+                    result = home.kernel.federation_receive(
+                        peer["name"], payload["agent"], payload["objective"])
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except AgentError as e:
+                    return self._json(400, {"error": str(e)})
+                except FederationError as e:
+                    return self._json(401, {"error": str(e)})
+                return self._json(200, result)
             if u.path == "/api/plugins":
                 from .plugins import PluginError
                 try:

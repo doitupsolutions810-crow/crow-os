@@ -20,6 +20,8 @@ from .capabilities import Broker
 from .devices import DeviceRegistry
 from .plugins import PluginRegistry
 from .routines import RoutineStore
+from .federation import (FederationError, Identity, PeerStore,
+                         signed_dispatch, _slug as _slug_name)
 from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
@@ -53,6 +55,9 @@ class Kernel:
         self.devices = DeviceRegistry(self.fs)  # hosting devices
         self.plugins = PluginRegistry(self.fs)  # connect-apps catalog
         self.routines = RoutineStore(self.fs)  # scheduled agent runs
+        self.peers = PeerStore(self.fs)  # federation peer registry
+        self._identity: Identity | None = None
+        self._identity_error: str | None = None
         self._spawn_depth: dict[str, int] = {}  # root job_id -> depth
         # Operator's explicit choice: may agent tools reach non-public
         # addresses (intranet)? Default NO — the SSRF guard refuses
@@ -355,6 +360,60 @@ class Kernel:
         if job["status"] == "completed":
             self._persist_artifact(job_id)
         return job
+
+    # -- federation -----------------------------------------------------
+    @property
+    def identity(self) -> Identity:
+        if self._identity is None:
+            if self._identity_error:
+                raise FederationError(self._identity_error)
+            import socket
+            name = os.environ.get("CROW_OS_NAME") or socket.gethostname()
+            try:
+                self._identity = Identity(self.home, _slug_name(name))
+            except ImportError:
+                self._identity_error = ("federation needs the cryptography "
+                                        "package for Ed25519 identity")
+                raise FederationError(self._identity_error) from None
+        return self._identity
+
+    def identity_info(self) -> dict[str, Any]:
+        try:
+            ident = self.identity
+            return {"name": ident.name, "pubkey": ident.pubkey_hex,
+                    "fingerprint": ident.fingerprint, "federation": True}
+        except FederationError as e:
+            return {"name": None, "pubkey": None, "fingerprint": None,
+                    "federation": False, "error": str(e)}
+
+    def federation_dispatch(self, peer_name: str, agent_id: str,
+                            objective: str) -> dict[str, Any]:
+        """Send a signed run request to a peer home and attest it.
+
+        The job runs on the PEER's ledger under its own governance;
+        this home records who it asked and what came back.
+        """
+        peer = self.peers.get(peer_name)
+        reply = signed_dispatch(self.identity, peer, agent_id, objective)
+        self.ledger.append("crow-os/kernel", "federation.dispatched", {
+            "peer": peer["name"], "agent": agent_id,
+            "remote_job_id": reply.get("job", {}).get("job_id"),
+            "status": reply.get("job", {}).get("status")})
+        return reply
+
+    def federation_receive(self, from_peer: str, agent_id: str,
+                           objective: str,
+                           base_url: str | None = None) -> dict[str, Any]:
+        """Run a job for a verified peer (signature checked by the
+        server layer before this is called). The agent is validated
+        BEFORE the receipt is attested — no false attestations."""
+        self.agents.get(agent_id)
+        self.ledger.append("crow-os/kernel", "federation.received", {
+            "from": from_peer, "agent": agent_id})
+        job = self.run_agent(objective, agent_id, base_url=base_url)
+        return {"job": job,
+                "artifact": (self.outputs.get(job["job_id"]) or {}).get("artifact", ""),
+                "transcript": self.transcript(job["job_id"])}
 
     def computer_info(self) -> dict[str, Any]:
         """The Bot Computer page: the one computer the agents share —
