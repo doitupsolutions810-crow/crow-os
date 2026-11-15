@@ -42,3 +42,7 @@ Sandbox execution of isolated source and isolated stub-ledger harness:
 - Integration tests show partial Ollama output marks a job failed and successful output reaches deterministic governance.
 - Local operator checks actual Ollama model health and one smoke inference on their machine.
 - No merge or deployment until these checks pass.
+
+## v0.9 integration preservation
+
+This branch was merged with main 786db364f033e06d593a36780d630bcbbbe8c059. This keeps the native v0.9 loopback proxy bypass, installed-model selection, error reporting, coder repair and its tests. Existing vendor behavior is not intentionally removed. Full CI on the merge head is pending.

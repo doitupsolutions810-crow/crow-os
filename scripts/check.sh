@@ -3,10 +3,17 @@
 # Usage: scripts/check.sh [python]
 set -e
 PY="${1:-python3}"
+# Probe clients talk to servers on 127.0.0.1; a proxy in the environment must not catch them.
+export NO_PROXY="127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}"
+export no_proxy="$NO_PROXY"
+# Hermetic: the probes expect no Ollama on the default endpoint (auto mode -> demo).
+# On a box running a real Ollama they used to hit it and time out. Live checks:
+# CROW_OS_LIVE_OLLAMA=1 python3 -m unittest tests.test_v09_local_ollama
+export OLLAMA_HOST="127.0.0.1:9"
 cd "$(dirname "$0")/.."
 echo "== unit tests"
 $PY -m unittest discover -s tests
-for h in probes/edge_harness.py probes/edge_harness2.py probes/edge_harness3.py probes/edge_harness4.py probes/edge_harness5.py probes/edge_harness6.py probes/edge_harness7.py probes/edge_harness8.py probes/edge_harness9.py probes/edge_harness10.py probes/stub_harness.py; do
+for h in probes/edge_harness.py probes/edge_harness2.py probes/edge_harness3.py probes/edge_harness4.py probes/edge_harness5.py probes/edge_harness6.py probes/edge_harness7.py probes/edge_harness8.py probes/edge_harness9.py probes/edge_harness10.py probes/edge_harness11.py probes/stub_harness.py; do
   echo "== $h"
   $PY "$h" 2>/dev/null | tail -1
 done
