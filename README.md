@@ -39,12 +39,14 @@ inverts that priority order:
 ```bash
 PYTHONPATH=src python3 -m crow_os demo --home /tmp/crow-home
 # LLM-backed run (local Ollama; model via --model or CROW_OS_MODEL,
-# default qwen2.5-coder:32b; endpoint via --ollama or OLLAMA_HOST):
+# default qwen2.5-coder:32b, or the best installed local model when that
+# one is not pulled; endpoint via --ollama or OLLAMA_HOST; proxies are
+# bypassed for a local Ollama):
 crow --home /tmp/crow-home run --objective "build the OS"
 PYTHONPATH=src python3 -m crow_os verify --home /tmp/crow-home
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-Status: v0.2 — kernel + Ollama worker behind the capability gate. Deliberately small — the kernel proves the trust
+Status: v0.9.1 (see ROADMAP.md). Core since v0.2 — kernel + Ollama worker behind the capability gate. Deliberately small — the kernel proves the trust
 invariants first; LLM agents, fleet dispatch and federation plug in
 behind the same capability and ledger contracts.

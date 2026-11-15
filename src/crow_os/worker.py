@@ -26,7 +26,8 @@ PROMPTS = {
                  "Return a short plan with numbered acceptance criteria."),
     "coder": ("You are the coder in a 4-role chain. "
               "Return only the artifact (code or text) implementing the plan. "
-              "Include the plan reference line exactly as given."),
+              "The FIRST line of your answer must be the plan reference line, "
+              "copied exactly as given (as a comment if the artifact is code)."),
 }
 
 
@@ -88,6 +89,17 @@ class LLMWorker:
                 f"Plan reference line: plan:{job_id}",
                 on_token=(lambda t: outputs[job_id].__setitem__(
                     "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
+            ref = f"plan:{job_id}"
+            if artifact.strip() and ref not in artifact:
+                # Small local models (3B) often drop the reference line. Ask once more,
+                # with the same gate already held; the tester's check stays exact.
+                self.ledger.append("crow-os/worker", "coder.repair", {
+                    "job_id": job_id, "reason": "plan reference line missing"})
+                artifact = self.client.chat_stream(
+                    PROMPTS["coder"],
+                    f"Your previous answer was missing the required first line.\n"
+                    f"First line, exactly: {ref}\nThen the full artifact again.\n\n"
+                    f"Previous answer:\n{artifact[:20000]}")
             state = self.workflow.report(job_id, "coder", bool(artifact.strip()),
                                          f"artifact chars={len(artifact)}")
             if outputs is not None:
@@ -103,6 +115,9 @@ class LLMWorker:
             state = self.workflow.report(job_id, "tester", all(checks),
                                          f"criteria {sum(checks)}/{len(checks)}")
             if state["status"] == "failed":
+                # say why: a failed job with no error left `crow run` printing nothing useful
+                state["error"] = ("tester: artifact does not contain the plan reference line "
+                                  f"{ref!r}" if not checks[0] else "tester: empty artifact")
                 return state
 
             # governance (deterministic: ledger must verify)

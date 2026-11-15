@@ -118,7 +118,7 @@ def r6():
     # Ollama down (nothing on the default port in this sandbox): auto -> demo
     home2 = tempfile.mkdtemp()
     env2 = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
-    env2.pop("OLLAMA_HOST", None)
+    env2["OLLAMA_HOST"] = "127.0.0.1:9"  # down for sure, even on a box running a real Ollama
     srv2 = subprocess.Popen([sys.executable, "-m", "crow_os.cli", "--home", home2,
                              "serve", "--port", "8797"], env=env2,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
