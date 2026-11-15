@@ -205,9 +205,23 @@ carrying the signature — mTLS can wrap the same endpoints later
 without changing the trust model. Round-18 probes cover the full
 refusal matrix.
 
-Remaining designed-but-unwired item: live third-party connectors
-behind the Connect-apps catalog (today: verified-local or
-user-asserted only, and labeled as such wherever shown).
+## v0.16 — connectors go live (shipped)
+
+The Connect-apps catalog's last hypothetical is wired. A connector
+framework (connectors.py) gives each integration three honest
+states — not configured / configured-but-unreachable / live —
+checked against the real endpoint. Secrets come only from the
+environment or a 0600 file in the home's secrets/ directory; they
+never pass through chat, the API, CrowFS, or the ledger (probed).
+The GitHub connector ships read-only tools (github.repos,
+github.whoami) against api.github.com by default; agents are
+granted them like any tool and invoke them with
+"connector: <tool>" lines — capability-gated before the call,
+attested as tool.invoked. When the check passes, the catalog entry
+flips from "connected (your word)" to "live · verified"; when the
+API refuses, it drops to "configured · unreachable" and agent
+directives fail soft with no fake data. GET /api/connectors,
+POST /api/connectors/<id>.
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
