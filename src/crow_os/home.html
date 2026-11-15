@@ -251,7 +251,7 @@
   <div class="prow"><div class="grow"><b>📚 Library</b><small id="pf-library">—</small></div></div>
   <div class="prow"><div class="grow"><b>🖥 Computer</b><small id="pf-computer">—</small></div></div>
   <div class="prow"><div class="grow"><b>🔐 Permissions</b><small id="pf-perms">—</small></div></div>
-  <div class="prow"><div class="grow"><b>🔁 Routines</b><small>0 on</small></div></div>
+  <div class="prow"><div class="grow"><b>🔁 Routines</b><small id="pf-routines">0 on</small></div></div>
   <div class="prow"><div class="grow"><b>🔔 Notifications</b><small>Get notified when this agent finishes or is waiting for you.</small></div>
     <label class="switch"><input type="checkbox" id="pf-notify"><i></i></label></div>
   <div class="prow"><div class="grow"><b>📜 Instructions</b><small id="pf-ins" style="white-space:pre-wrap"></small></div></div>
@@ -577,6 +577,10 @@ async function loadHud(){
     $("#hud-device").textContent="🖥 "+(local.name||"this device")+" · Ollama "+(local.ollama&&local.ollama.reachable?"●":"○");
     $("#hud-host").textContent="hosting: "+(d.hosting&&d.hosting.serving?("live on :"+d.hosting.port):"not serving");
   }catch(_){ $("#hud-device").textContent="🖥 demo feed"; $("#hud-host").textContent="hosting: —"; }
+  try{ const rt=await (await fetch("/api/routines")).json();
+    const mine=(rt.routines||[]).filter(r=>r.agent===a.id&&r.enabled);
+    $("#pf-routines").textContent=mine.length+" on"+(mine.length?(" — "+mine.map(r=>r.name).join(", ")):"");
+  }catch(_){}
   try{ const j=await (await fetch("/api/jobs")).json();
     const squad=["debugger","coder","tester","governance"];
     const working=(j.jobs||[]).filter(x=>x.status==="running"&&x.chain&&x.chain.length===2&&!squad.includes(x.chain[0])).length;
@@ -641,6 +645,10 @@ async function openProfile(a){
   $("#pf-perms").textContent=(a.tools&&a.tools.length)?("EXECUTE jobs."+a.id+" · TOOL "+a.tools.join(", ")):"EXECUTE jobs."+a.id+" · no tool grants";
   $("#pf-ins").textContent=a.instructions;
   const nt=(settings.notify||{})[a.id]; $("#pf-notify").checked=!!nt;
+  try{ const rt=await (await fetch("/api/routines")).json();
+    const mine=(rt.routines||[]).filter(r=>r.agent===a.id&&r.enabled);
+    $("#pf-routines").textContent=mine.length+" on"+(mine.length?(" — "+mine.map(r=>r.name).join(", ")):"");
+  }catch(_){}
   try{ const j=await (await fetch("/api/jobs")).json();
     const mine=(j.jobs||[]).filter(x=>x.chain&&x.chain[0]===a.id);
     const working=mine.some(x=>x.status==="running");

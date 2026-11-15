@@ -158,7 +158,42 @@ Manage your devices, Permissions (capability grants per agent).
   <job_id>`; transcripts stay complete after a restart by falling
   back to the persisted artifact in Documents.
 
-## v0.13 — fleet
+## v0.13 — agents get file tooling (shipped)
+
+- fs grants were inert for agent runs; they are real now. An agent
+  granted fs.read / fs.list acts on "fs read: <path>" /
+  "fs list: <path>" lines in the objective: gated before any disk
+  I/O, attested as tool.invoked, content pulled into its context,
+  failures fail soft. Combined with net.fetch and agent.spawn, one
+  chat message can now fetch a page, read a file and delegate —
+  all in one governed run.
+
+## v0.14 — bridging the hypotheticals (shipped)
+
+The three near-term evolutions, wired:
+
+- **Agent memory**: every agent has a memory file in CrowFS
+  (/system/agents/<id>.memory.md). "remember: <text>" lines in a
+  chat are stored before the run (attested as agent.remembered);
+  memory rides into later runs' context (bounded to the newest
+  2,000 chars; file capped at 32KB); each completed run auto-notes
+  its objective and result. GET /api/agents/<id>/memory.
+- **Routines**: scheduled agent runs — definitions in
+  /system/routines, due-check + fire split in the kernel, a tick
+  loop in `crow serve`, routine.fired attested per firing.
+  GET/POST/DELETE /api/routines, POST /api/routines/<id>/toggle.
+  The bot profile's Routines count is real now.
+- **Fleet dispatch**: one objective across 1–8 agents in parallel;
+  membership attested (fleet.member) before anyone runs; the
+  parent completes only if ALL members complete; merged output on
+  the parent job. POST /api/fleet.
+
+Still hypothetical, by design: multi-device federation (mTLS
+between Crow homes, Ed25519 identity per home — the signer is
+already in the tree) and live third-party connectors behind the
+Connect-apps catalog (today: verified-local or user-asserted only).
+
+## v0.15 — federation
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 

@@ -145,7 +145,8 @@ class AgentWorker:
 
     def run(self, objective: str, agent: dict[str, Any], cap: dict[str, Any],
             outputs: dict | None = None,
-            job_id: str | None = None) -> dict[str, Any]:
+            job_id: str | None = None,
+            memory: str = "") -> dict[str, Any]:
         agent_id = agent["id"]
         if job_id is None:
             job_id = self.workflow.create_job(
@@ -199,9 +200,11 @@ class AgentWorker:
                         context += f"\n(fs {op} {vpath} failed: {e})\n"
             if outputs is not None:
                 outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
+            memory_block = (f"\nYour memory from earlier runs:\n"
+                            f"{memory[-2000:]}\n") if memory else ""
             reply = self.client.chat_stream(
                 agent["instructions"],
-                f"Objective: {objective}\n{context}",
+                f"Objective: {objective}\n{memory_block}{context}",
                 on_token=(lambda t: outputs[job_id].__setitem__(
                     "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
             state = self.workflow.report(job_id, agent_id, bool(reply.strip()),
@@ -217,7 +220,7 @@ class AgentWorker:
             # agent.spawned and enforces the depth cap).
             if self.spawner is not None and \
                     "agent.spawn" in (agent.get("tools") or []):
-                role = "governance"  # failure cannot re-report completed agent step
+                role = "governance"  # denials cannot re-report the completed agent role
                 subs = []
                 for line in objective.splitlines():
                     m = _DELEGATE_RE.match(line.strip())
@@ -226,8 +229,8 @@ class AgentWorker:
                         # role, depth cap) must not kill the parent
                         # job: record the refusal and carry on to
                         # governance.
-                        # Verify a signed TOOL grant on EACH delegation.
-                        # Agent-declared tools do not themselves authorize work.
+                        # Every spawn requires the signed, scoped TOOL right.
+                        # Agent metadata alone cannot authorize a child.
                         self.broker.authorize(cap, "TOOL", "agent.spawn")
                         try:
                             child = self.spawner(job_id, m.group(1),
