@@ -39,7 +39,7 @@
   .msg{display:flex;gap:11px}
   .msg .who{flex:none;width:30px;height:30px;border-radius:50%;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:14px}
   .msg.user{justify-content:flex-end}
-  .msg.user .bubble{background:#232329;border-radius:18px;padding:10px 16px;max-width:85%}
+  .msg.user .bubble{background:#ff7a1a;color:#fff;border-radius:18px;padding:10px 16px;max-width:85%}
   .bubble{padding-top:3px;max-width:100%}
   /* thinking card — Grok-style collapsible */
   .think{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);overflow:hidden}
@@ -78,6 +78,33 @@
   .iconbtn:hover{background:var(--panel);color:var(--txt)}
   #railfoot{display:flex;align-items:center;gap:9px}
   .avatar{width:28px;height:28px;border-radius:50%;background:#333;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:13px;flex:none}
+  .avt{position:relative;display:inline-block;flex:none;width:26px;height:26px;background:#ff7a1a}
+  .avt::before,.avt::after{content:"";position:absolute;top:38%;width:3.5px;height:6px;border-radius:50%;background:rgba(0,0,0,.55)}
+  .avt::before{left:30%}.avt::after{right:30%}
+  .avt.big{width:84px;height:84px}
+  .avt.big::before,.avt.big::after{width:9px;height:17px}
+  .avt.blob{border-radius:46% 54% 52% 48%/48% 46% 54% 52%}
+  .avt.round{border-radius:50%}
+  .avt.square{border-radius:22%}
+  .avt.tall{border-radius:46% 54% 52% 48%/58% 56% 44% 42%;height:32px}
+  .avt.wide{border-radius:54% 46% 48% 52%/44% 48% 52% 56%;width:32px}
+  .avt.drop{border-radius:50% 50% 50% 50%/62% 62% 38% 38%}
+  .avt.diamond{border-radius:26%;transform:rotate(45deg)}
+  .avt.ring{border-radius:50%;box-shadow:inset 0 0 0 5px rgba(0,0,0,.18)}
+  .avt.pill{border-radius:99px;width:34px}
+  .avt.star{border-radius:38% 62% 40% 60%/58% 40% 62% 42%}
+  .avt.hex{border-radius:18% 18% 18% 18%/30% 30% 30% 30%}
+  .avt.wave{border-radius:60% 40% 55% 45%/50% 60% 40% 55%}
+  .avt.egg{border-radius:50% 50% 50% 50%/42% 42% 58% 58%}
+  .swrow{display:flex;gap:7px;flex-wrap:wrap;margin:4px 0}
+  .sw{width:22px;height:22px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0}
+  .sw.sel{border-color:#fff}
+  #profile,#plugins{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-start;justify-content:center;z-index:60;padding-top:5vh}
+  #profile.open,#plugins.open{display:flex}
+  #profile .card,#plugins .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;max-width:520px;width:92%;max-height:84vh;overflow:auto;padding:20px 22px}
+  .prow{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .prow .grow{flex:1}.prow small{display:block;color:var(--dim);margin-top:2px}
+  .plugbtn{margin-left:auto}
   #settings{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:60}
   #settings.open{display:flex}
   #settings .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;max-width:520px;width:92%;max-height:84vh;overflow:auto;padding:20px 22px}
@@ -135,6 +162,16 @@
   <form id="agentform" style="display:none">
     <input id="agname" placeholder="Agent name" maxlength="60">
     <textarea id="agins" rows="4" placeholder="Custom instructions — what should this agent do, and how?"></textarea>
+    <select id="agshape" style="width:100%">
+      <option value="blob">Shape: Blob</option><option value="round">Round</option>
+      <option value="square">Square</option><option value="tall">Tall</option>
+      <option value="wide">Wide</option><option value="drop">Drop</option>
+      <option value="diamond">Diamond</option><option value="ring">Ring</option>
+      <option value="pill">Pill</option><option value="star">Star</option>
+      <option value="hex">Hex</option><option value="wave">Wave</option>
+      <option value="egg">Egg</option>
+    </select>
+    <div class="swrow" id="agcolors"></div>
     <label class="agtool"><input type="checkbox" id="agtool-net"> 🌐 net.fetch — let it fetch pages</label>
     <label class="agtool"><input type="checkbox" id="agtool-spawn"> ⤵ agent.spawn — let it delegate to sub-agents (“delegate to &lt;agent&gt;: …”)</label>
     <button id="agcreate" type="submit">Create agent</button>
@@ -198,8 +235,35 @@
   <div class="row"><div class="grow"><b>Developer panels</b><small>Build panel (Code · App · Ledger · Sandbox · Files) and the system status bar.</small></div>
     <label class="switch"><input type="checkbox" id="set-dev"><i></i></label></div>
   <div class="row"><div class="grow"><b>Backend</b><small id="set-backend">—</small></div></div>
+  <div class="row"><div class="grow"><b>Connect apps</b><small id="set-plugins">Search plugins</small></div>
+    <button id="openplugins">Open</button></div>
+  <div class="row"><div class="grow"><b>Bot Computer</b><small id="set-computer">The one computer your agents share.</small></div></div>
+  <div class="row"><div class="grow"><b>Manage your devices</b><small id="set-devices">—</small></div></div>
+  <div class="row"><div class="grow"><b>Permissions</b><small id="set-perms">Capability grants per agent.</small></div></div>
   <div class="row" style="border-bottom:none"><div class="grow"><b>About</b><small>Crow OS — governed agents on your OS-installed Ollama. Every run is capability-gated and written to the signed ledger, whether or not you choose to look at it.</small></div></div>
   <button id="setclose" style="margin-top:8px">Done</button>
+</div></div>
+
+<div id="profile"><div class="card">
+  <div style="text-align:center;padding:6px 0 2px"><span class="avt big blob" id="pf-avt"></span>
+  <h2 id="pf-name" style="margin:10px 0 2px">Agent</h2>
+  <div style="color:var(--dim);font-size:12.5px" id="pf-sub"></div></div>
+  <div class="prow"><div class="grow"><b>📚 Library</b><small id="pf-library">—</small></div></div>
+  <div class="prow"><div class="grow"><b>🖥 Computer</b><small id="pf-computer">—</small></div></div>
+  <div class="prow"><div class="grow"><b>🔐 Permissions</b><small id="pf-perms">—</small></div></div>
+  <div class="prow"><div class="grow"><b>🔁 Routines</b><small>0 on</small></div></div>
+  <div class="prow"><div class="grow"><b>🔔 Notifications</b><small>Get notified when this agent finishes or is waiting for you.</small></div>
+    <label class="switch"><input type="checkbox" id="pf-notify"><i></i></label></div>
+  <div class="prow"><div class="grow"><b>📜 Instructions</b><small id="pf-ins" style="white-space:pre-wrap"></small></div></div>
+  <button id="pf-close" style="margin-top:10px">Done</button>
+</div></div>
+
+<div id="plugins"><div class="card">
+  <h2 style="margin:0 0 2px">Connect apps</h2>
+  <div style="color:var(--dim);font-size:12.5px" id="plug-count">—</div>
+  <input id="plug-search" placeholder="Search across apps and skills" style="width:100%;margin:12px 0 4px">
+  <div id="plug-list"></div>
+  <button id="plug-close" style="margin-top:10px">Done</button>
 </div></div>
 
 <aside id="build">
@@ -534,9 +598,13 @@ async function loadAgents(){
     squad.addEventListener("click",()=>{ selectedAgent=null; $("#modehint").textContent="backend: squad"; loadAgents(); });
     box.appendChild(squad);
     (d.agents||[]).forEach(a=>{ const b=document.createElement("button");
-      b.className="agentrow"+(selectedAgent===a.id?" on":""); b.textContent="🤖 "+a.name;
+      b.className="agentrow"+(selectedAgent===a.id?" on":"");
+      const av=document.createElement("span"); av.className="avt "+((a.avatar||{}).shape||"blob");
+      av.style.background=AVCOLORS[(a.avatar||{}).color]||"#ff7a1a"; av.style.marginRight="8px"; av.style.verticalAlign="middle";
+      b.appendChild(av); b.appendChild(document.createTextNode(a.name));
       const sp=document.createElement("span"); sp.textContent=a.instructions; b.appendChild(sp);
       b.addEventListener("click",()=>{ selectedAgent=a.id; $("#modehint").textContent="talking to "+a.name; loadAgents(); });
+      b.addEventListener("dblclick",()=>openProfile(a));
       box.appendChild(b); });
   }catch(_){ /* demo feed: agents unavailable */ }
 }
@@ -545,7 +613,8 @@ $("#newagent").addEventListener("click",()=>{ const f=$("#agentform");
 $("#agentform").addEventListener("submit",async e=>{ e.preventDefault();
   const _tools=[]; if($("#agtool-net").checked)_tools.push("net.fetch");
   if($("#agtool-spawn")&&$("#agtool-spawn").checked)_tools.push("agent.spawn");
-  const body={name:$("#agname").value, instructions:$("#agins").value, tools:_tools};
+  const body={name:$("#agname").value, instructions:$("#agins").value, tools:_tools,
+              avatar:{shape:$("#agshape").value, color:pickedColor}};
   try{ const r=await fetch("/api/agents",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const d=await r.json();
     if(!r.ok){ $("#agerr").textContent=d.error||"could not create agent"; return; }
@@ -553,6 +622,79 @@ $("#agentform").addEventListener("submit",async e=>{ e.preventDefault();
     selectedAgent=d.agent.id; $("#modehint").textContent="talking to "+d.agent.name; loadAgents();
   }catch(_){ $("#agerr").textContent="Backend unreachable."; }
 });
+const AVCOLORS={white:"#f5f5f5",brown:"#8d6e63",red:"#ef5350",orange:"#ff7a1a",yellow:"#ffd54f",green:"#66bb6a",teal:"#26a69a",blue:"#42a5f5",purple:"#ab47bc",pink:"#ec407a",gray:"#9e9e9e"};
+let pickedColor="orange";
+(function(){ const row=$("#agcolors"); if(!row) return;
+  Object.entries(AVCOLORS).forEach(([name,hex])=>{ const b=document.createElement("button");
+    b.type="button"; b.className="sw"+(name===pickedColor?" sel":""); b.style.background=hex; b.title=name;
+    b.addEventListener("click",()=>{ pickedColor=name; row.querySelectorAll(".sw").forEach(x=>x.classList.remove("sel")); b.classList.add("sel"); });
+    row.appendChild(b); }); })();
+
+/* ── bot profile (from the snapshot: avatar, Library, Computer, Permissions, Routines, Notifications) ── */
+let profileAgent=null;
+async function openProfile(a){
+  profileAgent=a;
+  const av=$("#pf-avt"); av.className="avt big "+((a.avatar||{}).shape||"blob");
+  av.style.background=AVCOLORS[(a.avatar||{}).color]||"#ff7a1a";
+  $("#pf-name").textContent=a.name;
+  $("#pf-sub").textContent="Custom agent · model: "+(a.model||"OS default");
+  $("#pf-perms").textContent=(a.tools&&a.tools.length)?("EXECUTE jobs."+a.id+" · TOOL "+a.tools.join(", ")):"EXECUTE jobs."+a.id+" · no tool grants";
+  $("#pf-ins").textContent=a.instructions;
+  const nt=(settings.notify||{})[a.id]; $("#pf-notify").checked=!!nt;
+  try{ const j=await (await fetch("/api/jobs")).json();
+    const mine=(j.jobs||[]).filter(x=>x.chain&&x.chain[0]===a.id);
+    const working=mine.some(x=>x.status==="running");
+    $("#pf-library").textContent=mine.length+" run(s) — artifacts saved to /home/user/Documents";
+    $("#pf-computer").textContent=working?"Working now":"Idle";
+  }catch(_){ $("#pf-library").textContent="—"; $("#pf-computer").textContent="—"; }
+  $("#profile").classList.add("open");
+}
+$("#pf-close").addEventListener("click",()=>$("#profile").classList.remove("open"));
+$("#profile").addEventListener("click",e=>{ if(e.target.id==="profile") e.target.classList.remove("open"); });
+$("#pf-notify").addEventListener("change",e=>{ if(!profileAgent) return;
+  settings.notify=settings.notify||{}; settings.notify[profileAgent.id]=e.target.checked; saveSettings(); });
+
+/* ── connect apps ── */
+async function loadPlugins(){
+  try{ const d=await (await fetch("/api/plugins")).json();
+    $("#plug-count").textContent=d.connected+" connected";
+    const sb=$("#set-plugins"); if(sb) sb.textContent=d.connected+" connected — search plugins";
+    const q=($("#plug-search").value||"").toLowerCase();
+    const list=$("#plug-list"); list.innerHTML="";
+    let cat="";
+    (d.plugins||[]).filter(pl=>!q||pl.name.toLowerCase().includes(q)||pl.description.toLowerCase().includes(q)).forEach(pl=>{
+      if(pl.category!==cat){ cat=pl.category; list.append(el("div","seclabel",cat)); }
+      const row=el("div","prow"); const g=el("div","grow");
+      g.append(el("b","",pl.name)); g.append(el("small","",pl.description+" · "+pl.state));
+      row.append(g);
+      if(pl.kind==="asserted"){ const btn=el("button","plugbtn",pl.connected?"Connected ✓":"Connect");
+        btn.addEventListener("click",async ()=>{ await fetch("/api/plugins",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:pl.id,connected:!pl.connected})}); loadPlugins(); });
+        row.append(btn); }
+      list.append(row); });
+  }catch(_){ $("#plug-count").textContent="Backend unreachable."; }
+}
+$("#openplugins").addEventListener("click",()=>{ $("#settings").classList.remove("open"); $("#plugins").classList.add("open"); loadPlugins(); });
+$("#plug-close").addEventListener("click",()=>$("#plugins").classList.remove("open"));
+$("#plugins").addEventListener("click",e=>{ if(e.target.id==="plugins") e.target.classList.remove("open"); });
+$("#plug-search").addEventListener("input",loadPlugins);
+
+/* ── settings: Bot Computer, devices, permissions (snapshot sections) ── */
+function fmtBytes(n){ if(n==null) return "—"; const u=["B","KB","MB","GB","TB"]; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return n.toFixed(n>=100?0:1)+" "+u[i]; }
+async function loadSettingsPanels(){
+  try{ const c=await (await fetch("/api/computer")).json();
+    $("#set-computer").textContent="The one computer your agents share. Disk space: "+fmtBytes(c.computer.disk_free)+" free of "+fmtBytes(c.computer.disk_total)+" · Crow OS home "+fmtBytes(c.computer.home_bytes)+" · hosting "+(c.hosting.serving?("live on :"+c.hosting.port):"off");
+  }catch(_){}
+  try{ const d=await (await fetch("/api/devices")).json();
+    $("#set-devices").textContent=(d.devices||[]).map(x=>x.name+(x.verified?" (this computer)":" (registered)")).join(" · ");
+  }catch(_){}
+  try{ const a=await (await fetch("/api/agents")).json();
+    $("#set-perms").textContent=(a.agents||[]).length? (a.agents||[]).map(x=>x.name+": "+((x.tools||[]).join(", ")||"no tools")).join(" · ") : "Squad only — no custom agents yet.";
+  }catch(_){}
+  loadPlugins();
+}
+const _openSettings=openSettings;
+openSettings=function(){ _openSettings(); loadSettingsPanels(); };
+
 loadAgents();
 
 /* ── composer ── */

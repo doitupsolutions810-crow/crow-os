@@ -147,6 +147,17 @@ def make_handler(home: HomeServer):
                     self._json(404, {"error": "no such job"})
                 else:
                     self._json(200, detail)
+            elif u.path == "/api/plugins":
+                info = home.model_info()
+                plugins = home.kernel.plugins.list(info["reachable"])
+                self._json(200, {"plugins": plugins, "connected":
+                                 sum(1 for p in plugins if p["connected"])})
+            elif u.path == "/api/computer":
+                info = home.model_info()
+                self._json(200, {"computer": home.kernel.computer_info(),
+                                 "hosting": {"serving": home.port is not None,
+                                             "port": home.port},
+                                 "ollama": info})
             elif u.path == "/api/devices":
                 info = home.model_info()
                 self._json(200, {"devices": home.kernel.devices.list(
@@ -208,12 +219,25 @@ def make_handler(home: HomeServer):
                     agent = home.kernel.agents.create(
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
-                        tools=payload.get("tools"))
+                        tools=payload.get("tools"),
+                        avatar=payload.get("avatar"))
                 except (ValueError, json.JSONDecodeError):
                     return self._json(400, {"error": "body must be JSON"})
                 except AgentError as e:
                     return self._json(400, {"error": str(e)})
                 return self._json(201, {"agent": agent})
+            if u.path == "/api/plugins":
+                from .plugins import PluginError
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    home.kernel.plugins.set_asserted(
+                        payload.get("id"), bool(payload.get("connected")))
+                except (ValueError, json.JSONDecodeError):
+                    return self._json(400, {"error": "body must be JSON"})
+                except PluginError as e:
+                    return self._json(400, {"error": str(e)})
+                return self._json(200, {"ok": True})
             if u.path == "/api/devices":
                 from .devices import DeviceError
                 try:

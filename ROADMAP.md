@@ -135,7 +135,20 @@ hosting awareness (the daemon's hosting model).
   (off = agents run with zero tool calls), and a live count of
   agents at work / active runs.
 
-## v0.11 — fleet
+## v0.11 — match the snapshot (shipped)
+
+Brandon sent a screen recording of the real Grok Bot app; the OS
+now matches its environment: agents carry blob avatars (13 shapes x
+11 colors from the Create-a-Bot sheet, rendered with the two oval
+eyes), user messages are orange bubbles, every agent has a profile
+view (avatar, Library, Computer status, Permissions, Routines,
+Notifications), Settings carries the snapshot's sections — Connect
+apps (a plugin catalog with categories and Connect buttons; states
+are verified / built-in / user-asserted, never faked), Bot Computer
+("the one computer your agents share" — real disk and home sizes),
+Manage your devices, Permissions (capability grants per agent).
+
+## v0.12 — fleet
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 

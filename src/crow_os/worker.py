@@ -188,11 +188,19 @@ class AgentWorker:
                 for line in objective.splitlines():
                     m = _DELEGATE_RE.match(line.strip())
                     if m and len(subs) < 3:
-                        child = self.spawner(job_id, m.group(1),
-                                             m.group(2).strip())
-                        subs.append({"agent": m.group(1),
-                                     "job_id": child["job_id"],
-                                     "status": child["status"]})
+                        # A bad delegation (unknown agent, reserved
+                        # role, depth cap) must not kill the parent
+                        # job: record the refusal and carry on to
+                        # governance.
+                        try:
+                            child = self.spawner(job_id, m.group(1),
+                                                 m.group(2).strip())
+                            subs.append({"agent": m.group(1),
+                                         "job_id": child["job_id"],
+                                         "status": child["status"]})
+                        except Exception as e:  # noqa: BLE001 - fail soft
+                            subs.append({"agent": m.group(1),
+                                         "error": f"{type(e).__name__}: {e}"})
                 if subs and outputs is not None:
                     outputs[job_id]["subagents"] = subs
             role = "governance"

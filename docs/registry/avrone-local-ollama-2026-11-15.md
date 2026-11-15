@@ -115,3 +115,7 @@ No user's physical Ollama service or model was accessed.
 No production rollout or merge was performed.
 
 Release decision remains **HOLD**.
+
+## Live-agent hardening reconnaissance — upstream v0.12
+
+Merged upstream `28c14838505920f1fa6c8c412970419c6a6de90e` as an independent parent. Kept the newer custom-agent avatar UI, plugin catalog, host status and delegation runtime from main; retained hardened Ollama and AVRONE evidence adapters. A new agent security/test round follows on this merged source. No live local Mac Ollama session available for direct control.
