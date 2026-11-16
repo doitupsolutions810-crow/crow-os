@@ -222,6 +222,27 @@ flips from "connected (your word)" to "live · verified"; when the
 API refuses, it drops to "configured · unreachable" and agent
 directives fail soft with no fake data. GET /api/connectors,
 POST /api/connectors/<id>.
+
+## v0.16.1 — combined-surfaces fix (shipped locally, awaiting push)
+
+Round 20 probed the v0.14–v0.16 surfaces in combination for the
+first time — the gap flagged after v0.16.0. Six probes, all green:
+- GG1 routine writes agent memory, recalled by a later run
+- GG2 federated run writes the REMOTE agent's memory; nothing leaks
+  into the sender's memory or ledger
+- GG3 federated run uses a connector; the token appears nowhere on
+  the sender and the remote ledger still verifies
+- GG4 a misdirected connector is NOT live (see fix below)
+- GG5 fleet writes per-member memory for every member
+- GG6 routine fires a granted connector, attested and in the
+  transcript
+
+One real defect, fixed: the GitHub live check accepted any endpoint
+that answered 200 with JSON, so a non-GitHub service (or a stub)
+counted as "live · verified". The check now requires a GitHub user
+object — a dict with a `login` — and anything else is
+"unreachable". Totals: 168 probes + unit suite, all green via
+scripts/check.sh.
 - Node registry + signed dispatch between Crow OS homes
 - Agent-home migration as a ledger-attested operation
 
