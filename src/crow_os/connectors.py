@@ -108,7 +108,14 @@ class ConnectorRegistry:
             return cached[1], cached[2]
         try:
             data = self._get(connector_id, base, "/user", token)
-            result = (True, f"@{data.get('login', '?')}")
+            # A live check must prove the endpoint IS GitHub, not just
+            # that something answered with JSON: a wrong-shape payload
+            # (any other service, a stub, a proxy error page parsed as
+            # JSON) is unreachable, never "live · verified".
+            if not isinstance(data, dict) or not data.get("login"):
+                result = (False, "endpoint did not return a GitHub user object")
+            else:
+                result = (True, f"@{data.get('login', '?')}")
         except ConnectorError as e:
             result = (False, str(e))
         self._checks[connector_id] = (now, result[0], result[1])
@@ -146,10 +153,14 @@ class ConnectorRegistry:
         token = self._token(connector_id)
         if tool == "github.whoami":
             data = self._get(connector_id, base, "/user", token)
+            if not isinstance(data, dict):
+                raise ConnectorError("github API returned an unexpected shape for whoami")
             return {"tool": tool, "login": data.get("login"),
                     "name": data.get("name"), "public_repos": data.get("public_repos")}
         if tool == "github.repos":
             data = self._get(connector_id, base, "/user/repos?per_page=100", token)
+            if not isinstance(data, list):
+                raise ConnectorError("github API returned an unexpected shape for repos")
             names = [r.get("full_name") for r in data if isinstance(r, dict)]
             return {"tool": tool, "count": len(names), "repos": names}
         raise ConnectorError(f"unimplemented connector tool: {tool}")
