@@ -223,7 +223,7 @@ API refuses, it drops to "configured · unreachable" and agent
 directives fail soft with no fake data. GET /api/connectors,
 POST /api/connectors/<id>.
 
-## v0.16.1 — combined-surfaces fix (shipped locally, awaiting push)
+## v0.16.1 — combined-surfaces fix (shipped)
 
 Round 20 probed the v0.14–v0.16 surfaces in combination for the
 first time — the gap flagged after v0.16.0. Six probes, all green:
@@ -255,3 +255,22 @@ scripts/check.sh.
 - Identity fallbacks that claim a production trust domain
 - In-memory job state
 - Any component whose README claims more than its tests prove
+
+## v0.16.2 — federation replay fix (shipped)
+
+Round 21 probed federation for replay: the identical signed dispatch
+body POSTed twice to /api/federation/run executed TWO remote jobs.
+verify_incoming checked signature + timestamp (120s window) only —
+no nonce, no seen-request store — so anyone on the HTTP path between
+homes who captured one dispatch could re-execute it inside the
+window, connector calls and memory writes included.
+
+Fix: the receiver records every accepted signed request in a
+persistent seen-store (CrowFS /system/federation-seen.json, so a
+restart does not reopen the window) and refuses a replay with 401
+before the federation.received attestation or the run. The store is
+keyed by a hash of the canonical signed body, not the timestamp —
+two distinct objectives sharing one timestamp still both run (R4).
+Probes: R1/R5 replays refused 401, R2 stale ts refused, R3 tampered
+objective refused, R4 same-ts distinct objectives both run. Totals:
+173 probes + unit suite, all green via scripts/check.sh.
