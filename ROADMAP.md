@@ -274,3 +274,27 @@ two distinct objectives sharing one timestamp still both run (R4).
 Probes: R1/R5 replays refused 401, R2 stale ts refused, R3 tampered
 objective refused, R4 same-ts distinct objectives both run. Totals:
 173 probes + unit suite, all green via scripts/check.sh.
+
+## v0.16.3 — federation replay, concurrent (unpushed)
+
+Round 22 probed the v0.16.2 replay fix under concurrency and restart,
+which Round 21 never did. Three real defects, all fixed:
+- C1 concurrent replay: 8 identical signed dispatches at once ran
+  the job 2–3 times — PeerStore.check_replay() is read-check-write
+  with no lock on a threaded server. Now held under a per-store
+  threading.Lock; exactly 1 run per burst, the rest 401.
+- C1/C3 dropped connections: concurrent writes to the same CrowFS
+  path shared one fixed tmp name (`.<name>.tmp`), so one thread's
+  os.replace() moved the tmp file out from under another, which died
+  with FileNotFoundError — uncaught in server.py, so the client saw
+  a dropped connection. CrowFS.write_file now uses a unique tmp name
+  per call (pid + random token); this protects every concurrent write
+  to the same path (seen-store, agent memory, peers.json).
+- C4 corrupt seen-store failed open: check_replay() swallowed
+  JSONDecodeError and reset the store to {}, so a replay ran after
+  the store was damaged. A present-but-unparseable (or non-dict)
+  store now refuses the dispatch with 401; a missing file (first
+  run) is still an empty store.
+C2 passed as-is: the seen-store survives a restart of the same home,
+replay still 401. Totals: 177 probes + unit suite, all green via
+scripts/check.sh (harness 22 wired in).
