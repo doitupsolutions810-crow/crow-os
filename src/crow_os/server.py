@@ -367,6 +367,7 @@ def make_handler(home: HomeServer):
                     length = int(self.headers.get("Content-Length") or 0)
                     payload = json.loads(self.rfile.read(length) or b"{}")
                     peer = verify_incoming(home.kernel.peers, payload)
+                    home.kernel.peers.check_replay(payload)
                     result = home.kernel.federation_receive(
                         peer["name"], payload["agent"], payload["objective"])
                 except (ValueError, json.JSONDecodeError):
