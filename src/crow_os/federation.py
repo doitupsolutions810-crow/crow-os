@@ -14,6 +14,15 @@ sender, federation.received on the receiver, each naming the other's
 job. Verification needs only public keys, so no home ever holds
 another home's secret.
 
+Replay protection (v0.16.2): a signed body is only honoured once
+inside the 120s window. The receiver keeps a seen-request store
+(/system/federation-seen.json, persisted in CrowFS so a restart
+inside the window does not reopen it), keyed by a hash of the
+canonical body + signature and pruned after MAX_SKEW. The key is
+the full body, not the timestamp: two distinct objectives sharing
+one ts must both still run. A replay is refused 401 before the
+receipt is attested or the job runs.
+
 Transport is plain HTTP carrying the signature; the identity and
 verification layer is the substance (mTLS can wrap the same
 endpoints later without changing the trust model).
@@ -32,6 +41,7 @@ from typing import Any
 from .fs import CrowFS, FSError
 
 PEERS_FILE = "/system/peers.json"
+SEEN_FILE = "/system/federation-seen.json"
 MAX_PEERS = 32
 MAX_SKEW = 120  # seconds
 
@@ -139,6 +149,36 @@ class PeerStore:
             raise FederationError(f"unknown peer: {name}")
         del peers[pid]
         self._save(peers)
+
+    def check_replay(self, payload: dict[str, Any]) -> None:
+        """Refuse a signed federation request seen before in the window.
+
+        Keyed by a hash of the canonical body + signature (the full
+        request, not the timestamp — two distinct objectives sharing
+        one ts must both still run). The store is persisted in CrowFS
+        so a restart inside the 120s window does not reopen the hole,
+        and entries are pruned once older than MAX_SKEW. Call after
+        verify_incoming and before the job runs, so a replay is
+        refused before federation.received is attested. Raises
+        FederationError on a replay.
+        """
+        from .signers import canon
+        body = {k: v for k, v in payload.items() if k != "sig"}
+        key = hashlib.sha256(
+            (canon(body) + "|" + str(payload.get("sig") or "")).encode()
+        ).hexdigest()
+        now = time.time()
+        try:
+            seen = json.loads(self.fs.read_file(SEEN_FILE))
+            seen = seen if isinstance(seen, dict) else {}
+        except (FSError, json.JSONDecodeError):
+            seen = {}
+        seen = {k: v for k, v in seen.items()
+                if isinstance(v, (int, float)) and now - v <= MAX_SKEW}
+        if key in seen:
+            raise FederationError("replayed federation request")
+        seen[key] = now
+        self.fs.write_file(SEEN_FILE, json.dumps(seen))
 
 
 def signed_dispatch(identity: Identity, peer: dict[str, Any],
