@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -104,6 +105,10 @@ class Identity:
 class PeerStore:
     def __init__(self, fs: CrowFS):
         self.fs = fs
+        # Round 22: check_replay is read-check-write; without this lock
+        # two threads serving the same signed dispatch both read a store
+        # that does not yet contain the key and both run the job.
+        self._replay_lock = threading.Lock()
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -168,17 +173,32 @@ class PeerStore:
             (canon(body) + "|" + str(payload.get("sig") or "")).encode()
         ).hexdigest()
         now = time.time()
-        try:
-            seen = json.loads(self.fs.read_file(SEEN_FILE))
-            seen = seen if isinstance(seen, dict) else {}
-        except (FSError, json.JSONDecodeError):
-            seen = {}
-        seen = {k: v for k, v in seen.items()
-                if isinstance(v, (int, float)) and now - v <= MAX_SKEW}
-        if key in seen:
-            raise FederationError("replayed federation request")
-        seen[key] = now
-        self.fs.write_file(SEEN_FILE, json.dumps(seen))
+        # The whole read-check-write holds the lock (Round 22): the
+        # server is threaded, and without it two identical dispatches
+        # arriving together both pass. A corrupt store now fails closed
+        # (Round 22, C4): swallowing JSONDecodeError and resetting to {}
+        # let a replay run after the store was damaged. A missing file
+        # (first run) is still an empty store — only a present-but-
+        # unparseable file refuses.
+        with self._replay_lock:
+            try:
+                seen = json.loads(self.fs.read_file(SEEN_FILE))
+            except FSError:
+                seen = {}
+            except json.JSONDecodeError:
+                raise FederationError(
+                    "federation seen-store unreadable; refusing dispatch"
+                ) from None
+            if seen and not isinstance(seen, dict):
+                raise FederationError(
+                    "federation seen-store unreadable; refusing dispatch"
+                )
+            seen = {k: v for k, v in seen.items()
+                    if isinstance(v, (int, float)) and now - v <= MAX_SKEW}
+            if key in seen:
+                raise FederationError("replayed federation request")
+            seen[key] = now
+            self.fs.write_file(SEEN_FILE, json.dumps(seen))
 
 
 def signed_dispatch(identity: Identity, peer: dict[str, Any],

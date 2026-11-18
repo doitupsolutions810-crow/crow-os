@@ -24,6 +24,7 @@ Standard tree (created on first boot):
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 MAX_FILE_BYTES = 262_144  # 256KB
@@ -128,7 +129,13 @@ class CrowFS:
         parent_real = real.parent.resolve()
         if parent_real != self._root_real and self._root_real not in parent_real.parents:
             raise FSError(f"path escapes the file system: {vpath}")
-        tmp = real.parent / f".{real.name}.tmp"
+        tmp = real.parent / f".{real.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        # Unique per call (Round 22): the old fixed ".<name>.tmp" name meant
+        # two threads writing the same virtual path raced — one thread's
+        # os.replace() moved the tmp file out from under the other, which
+        # then died with FileNotFoundError. Every concurrent write to the
+        # same path (federation seen-store, agent memory, peers.json)
+        # could hit it; the tmp name must never be shared.
         tmp.write_bytes(data)
         os.replace(tmp, real)
         return {"path": self.virtual(real), "bytes": len(data)}
