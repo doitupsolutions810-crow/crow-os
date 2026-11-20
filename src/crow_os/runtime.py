@@ -327,14 +327,51 @@ class Kernel:
         """Run one routine now: a normal governed agent run, attested
         as routine.fired, with the store's bookkeeping updated."""
         import time as _time
-        job_id = self.workflow.create_job(
-            routine["objective"], chain=[routine["agent"], "governance"])
-        self.ledger.append("crow-os/kernel", "routine.fired", {
-            "routine": routine["id"], "agent": routine["agent"],
-            "job_id": job_id})
-        self.routines.mark_run(routine["id"], _time.time())
+        from .routines import RoutineError
+        # Round 30: the last validate -> attest -> re-fetch path
+        # (harness 30). fire_routine used to validate NOTHING:
+        # create_routine checks the agent at creation time only, so
+        # an agent deleted afterwards left EVERY fire on the
+        # missing-agent path — job created, routine.fired attested,
+        # runs incremented, then run_agent's re-fetch raised
+        # AgentError and the job was stranded "running" (R2: 2 of 2
+        # fires; R3 storm: 18 of 24 attested fires false; the serve
+        # tick loop fired dead-agent routines the same way, R7).
+        # Now, mirroring Rounds 28/29: the registry lock is held
+        # across validate -> create -> attest, the validated agent
+        # definition is captured and passed to run_agent, and the
+        # lock is released before the run — a delete arriving after
+        # validation waits and the validated fire completes; a
+        # delete arriving first (or an already-gone agent, the
+        # deterministic case) refuses cleanly BEFORE any job,
+        # attestation, or bookkeeping. The routine's own existence
+        # is validated in the same section, so a fabricated or
+        # deleted routine record also refuses before attesting.
+        # mark_run stays immediately after the attestation, inside
+        # the lock: once attested, the fire is the point of no
+        # return (the run is guaranteed to start with the captured
+        # definition), so recording it there is truthful, and due()
+        # sees the new last_run at once, so a concurrent tick cannot
+        # double-fire the same routine mid-run. A RoutineError from
+        # mark_run itself means the routine record was deleted in
+        # the sliver after validation — its bookkeeping is gone
+        # with it, so the attested fire proceeds rather than
+        # stranding its job over a record that no longer exists.
+        with self.agents.lock:
+            agent = self.agents.get(routine["agent"])  # validate FIRST
+            self.routines.get(routine["id"])  # the routine must exist too
+            job_id = self.workflow.create_job(
+                routine["objective"], chain=[routine["agent"], "governance"])
+            self.ledger.append("crow-os/kernel", "routine.fired", {
+                "routine": routine["id"], "agent": routine["agent"],
+                "job_id": job_id})
+            try:
+                self.routines.mark_run(routine["id"], _time.time())
+            except RoutineError:
+                pass  # record deleted mid-fire; bookkeeping is moot
         return self.run_agent(routine["objective"], routine["agent"],
-                              base_url=base_url, job_id=job_id)
+                              base_url=base_url, job_id=job_id,
+                              agent=agent)
 
     # -- fleet --------------------------------------------------------------
     def fleet_run(self, objective: str, agent_ids: list[str],
