@@ -367,9 +367,45 @@ def make_handler(home: HomeServer):
                     length = int(self.headers.get("Content-Length") or 0)
                     payload = json.loads(self.rfile.read(length) or b"{}")
                     peer = verify_incoming(home.kernel.peers, payload)
-                    home.kernel.peers.check_replay(payload)
-                    result = home.kernel.federation_receive(
-                        peer["name"], payload["agent"], payload["objective"])
+                    # Round 27: agent existence is validated BEFORE the
+                    # replay check. federation_receive used to be the
+                    # first place agents.get ran — after check_replay
+                    # had already recorded the body — so a dispatch
+                    # naming an agent that did not exist (yet) was
+                    # refused 400 but its body was burned: creating
+                    # the agent and resending the same signed body
+                    # inside the window then hit 401 "replayed", even
+                    # though the job never ran and was never attested.
+                    # Same for a corrupt agent definition. Validating
+                    # here keeps a refused body out of the seen-store,
+                    # exactly as Rounds 25-26 do for malformed shapes.
+                    # federation_receive still re-checks before
+                    # attesting, so a direct caller is covered too.
+                    # Round 28: the Round-27 fix left a race — a delete
+                    # landing between this check and federation_receive
+                    # still burned the body (W1), and one landing
+                    # between the attestation and run_agent's re-fetch
+                    # left a federation.received receipt for a job
+                    # that never ran (W2). Round 28 reproduced both
+                    # with a delete-storm (15/48 bodies burned, 5
+                    # false attestations). The whole sequence now
+                    # holds the registry lock, which agents.delete
+                    # also takes, and the validated agent definition
+                    # is captured and passed through federation_receive
+                    # into run_agent — so the attestation and the run
+                    # use the agent as validated, never a re-fetch by
+                    # id. The lock is released before the run itself:
+                    # a delete arriving after validation waits, then
+                    # removes the agent, while the already-validated
+                    # dispatch still runs to completion. A delete
+                    # arriving first makes this refuse cleanly (400,
+                    # body never recorded).
+                    with home.kernel.agents.lock:
+                        agent = home.kernel.agents.get(payload["agent"])
+                        home.kernel.peers.check_replay(payload)
+                        result = home.kernel.federation_receive(
+                            peer["name"], payload["agent"],
+                            payload["objective"], agent=agent)
                 except (ValueError, json.JSONDecodeError):
                     return self._json(400, {"error": "body must be JSON"})
                 except AgentError as e:

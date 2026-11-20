@@ -138,12 +138,21 @@ class Kernel:
     def run_agent(self, objective: str, agent_id: str,
                   model: str | None = None, base_url: str | None = None,
                   job_id: str | None = None,
-                  tools_enabled: bool = True) -> dict[str, Any]:
+                  tools_enabled: bool = True,
+                  agent: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run one user-created agent: its custom instructions are the
         system prompt; it receives capabilities only for its granted
-        tools; governance still has the last word."""
+        tools; governance still has the last word.
+
+        `agent` is an already-fetched definition (Round 28): callers
+        that validated the agent before attesting something pass the
+        captured definition in, so the run uses the agent as it was
+        validated instead of re-fetching by id — a delete landing
+        after validation can no longer make the run fail after its
+        attestation was already written."""
         from .worker import AgentWorker
-        agent = self.agents.get(agent_id)
+        if agent is None:
+            agent = self.agents.get(agent_id)
         # "remember: <text>" lines are stored in the agent's memory
         # before the run, so they shape this run and every later one.
         for line in objective.splitlines():
@@ -411,14 +420,32 @@ class Kernel:
 
     def federation_receive(self, from_peer: str, agent_id: str,
                            objective: str,
-                           base_url: str | None = None) -> dict[str, Any]:
+                           base_url: str | None = None,
+                           agent: dict[str, Any] | None = None) -> dict[str, Any]:
         """Run a job for a verified peer (signature checked by the
         server layer before this is called). The agent is validated
-        BEFORE the receipt is attested — no false attestations."""
-        self.agents.get(agent_id)
+        BEFORE the receipt is attested — no false attestations.
+
+        `agent` is an already-fetched definition (Round 28): the
+        /api/federation/run handler validates under the registry lock
+        and passes the captured definition in, so the attestation and
+        the run use the same agent the handler checked — no re-fetch
+        by id that a mid-dispatch delete could break."""
+        # Round 25: the type contract is re-checked here, before the
+        # attestation, so a direct caller that skips verify_incoming
+        # can never leave a federation.received entry for a job that
+        # cannot run (a non-string objective crashed run_agent after
+        # the receipt was attested). Round 26: blank strings too —
+        # workflow.create_job refuses a blank objective with
+        # WorkflowError, which would otherwise crash after attesting.
+        if (not isinstance(agent_id, str) or not isinstance(objective, str)
+                or not agent_id.strip() or not objective.strip()):
+            raise FederationError("agent and objective must be non-empty strings")
+        if agent is None:
+            agent = self.agents.get(agent_id)
         self.ledger.append("crow-os/kernel", "federation.received", {
             "from": from_peer, "agent": agent_id})
-        job = self.run_agent(objective, agent_id, base_url=base_url)
+        job = self.run_agent(objective, agent_id, base_url=base_url, agent=agent)
         return {"job": job,
                 "artifact": (self.outputs.get(job["job_id"]) or {}).get("artifact", ""),
                 "transcript": self.transcript(job["job_id"])}
