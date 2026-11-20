@@ -18,7 +18,9 @@ Replay protection (v0.16.2): a signed body is only honoured once
 inside the 120s window. The receiver keeps a seen-request store
 (/system/federation-seen.json, persisted in CrowFS so a restart
 inside the window does not reopen it), keyed by a hash of the
-canonical body + signature and pruned after MAX_SKEW. The key is
+canonical body + signature and pruned once the SIGNED timestamp is
+older than MAX_SKEW (v0.16.4: pruning by receipt time let a
+future-dated body outlive its entry — see check_replay). The key is
 the full body, not the timestamp: two distinct objectives sharing
 one ts must both still run. A replay is refused 401 before the
 receipt is attested or the job runs.
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -98,7 +101,7 @@ class Identity:
             pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pubkey_hex))
             pub.verify(bytes.fromhex(sig_hex), canon(body).encode())
             return True
-        except (InvalidSignature, ValueError):
+        except (InvalidSignature, ValueError, TypeError):
             return False
 
 
@@ -162,10 +165,10 @@ class PeerStore:
         request, not the timestamp — two distinct objectives sharing
         one ts must both still run). The store is persisted in CrowFS
         so a restart inside the 120s window does not reopen the hole,
-        and entries are pruned once older than MAX_SKEW. Call after
-        verify_incoming and before the job runs, so a replay is
-        refused before federation.received is attested. Raises
-        FederationError on a replay.
+        and entries are pruned once the SIGNED timestamp is older
+        than MAX_SKEW. Call after verify_incoming and before the job
+        runs, so a replay is refused before federation.received is
+        attested. Raises FederationError on a replay.
         """
         from .signers import canon
         body = {k: v for k, v in payload.items() if k != "sig"}
@@ -180,6 +183,27 @@ class PeerStore:
         # let a replay run after the store was damaged. A missing file
         # (first run) is still an empty store — only a present-but-
         # unparseable file refuses.
+        # Round 23: the stored value is the SIGNED timestamp, not the
+        # receipt time. verify_incoming accepts future timestamps
+        # within MAX_SKEW (clock skew), so a body dated now+110 is
+        # still verifiable at receipt+130 — but an entry recorded at
+        # receipt time would already be pruned by then and the replay
+        # would run again. Pruning by the signed ts keeps the entry
+        # until ts+MAX_SKEW, past which verify_incoming refuses the
+        # body as stale anyway. Old stores hold receipt times; those
+        # are epoch seconds too, so the same prune still applies.
+        try:
+            body_ts = float(body.get("ts"))
+        except (TypeError, ValueError):
+            body_ts = now
+        if not math.isfinite(body_ts):
+            # Round 25: a NaN ts is not a timestamp. Storing it would
+            # write a value the prune pass (now - v <= MAX_SKEW, False
+            # for NaN) drops on the next call, so the entry would never
+            # block a replay. verify_incoming refuses non-finite ts
+            # first; this keeps check_replay self-consistent for any
+            # direct caller.
+            body_ts = now
         with self._replay_lock:
             try:
                 seen = json.loads(self.fs.read_file(SEEN_FILE))
@@ -197,7 +221,7 @@ class PeerStore:
                     if isinstance(v, (int, float)) and now - v <= MAX_SKEW}
             if key in seen:
                 raise FederationError("replayed federation request")
-            seen[key] = now
+            seen[key] = body_ts
             self.fs.write_file(SEEN_FILE, json.dumps(seen))
 
 
@@ -232,6 +256,23 @@ def verify_incoming(peers: PeerStore, payload: dict[str, Any]) -> dict[str, Any]
     Raises FederationError with the reason on any failure: unknown
     peer, stale timestamp, or a signature that does not verify
     against the registered public key.
+
+    Round 25: field TYPES are part of the contract, checked here
+    before anything else. verify_incoming previously passed
+    body["ts"] straight to float() — a ts of None, a list or a
+    dict raised TypeError, which the /api/federation/run handler
+    does not catch, so the client saw a dropped connection instead
+    of a refusal. A non-string objective passed verification and
+    only crashed later in run_agent (objective.splitlines()) —
+    after federation.received had already been attested, leaving a
+    receipt in the ledger for a job that never ran. A numeric-string
+    ts ("173...") was accepted and ran. And a NaN ts slipped both
+    guards at once: abs(now - NaN) > MAX_SKEW is False, so the body
+    never went stale, while the prune pass (now - v <= MAX_SKEW,
+    also False for NaN) dropped its seen-store entry on the next
+    call — so a captured NaN-ts dispatch replayed forever, not
+    just inside the 120s window. Wrong-typed or non-finite fields
+    are now refused 401 here, before any attestation or run.
     """
     if not isinstance(payload, dict):
         raise FederationError("body must be an object")
@@ -240,8 +281,28 @@ def verify_incoming(peers: PeerStore, payload: dict[str, Any]) -> dict[str, Any]
     for field in ("from", "agent", "objective", "ts"):
         if field not in body:
             raise FederationError(f"missing field: {field}")
+    for field in ("from", "agent", "objective"):
+        if not isinstance(body[field], str):
+            raise FederationError(f"field must be a string: {field}")
+    # Round 26: "" is a string, so it passed the Round-25 type check —
+    # but workflow.create_job refuses a blank objective, and it raises
+    # WorkflowError AFTER federation_receive attests federation.received
+    # (and the /api/federation/run handler does not catch WorkflowError),
+    # so an empty-objective dispatch dropped the connection AND left a
+    # receipt for a job that never ran. Blank fields refuse here, at
+    # the federation boundary, before any attestation or run.
+    for field in ("from", "agent", "objective"):
+        if not body[field].strip():
+            raise FederationError(f"field must be a non-empty string: {field}")
+    ts = body["ts"]
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        raise FederationError("field must be a number: ts")
+    if not math.isfinite(ts):
+        raise FederationError("field must be finite: ts")
+    if not isinstance(sig, str):
+        raise FederationError("signature does not verify")
     peer = peers.get(body["from"])  # unknown peer -> FederationError
-    if abs(time.time() - float(body["ts"])) > MAX_SKEW:
+    if abs(time.time() - float(ts)) > MAX_SKEW:
         raise FederationError("stale or future timestamp (replay window)")
     if not sig or not Identity.verify(peer["pubkey"], body, sig):
         raise FederationError("signature does not verify")

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from typing import Any
 
@@ -58,6 +59,15 @@ def _slugify(name: str) -> str:
 class AgentRegistry:
     def __init__(self, fs: CrowFS):
         self.fs = fs
+        # Round 28: the federation handler must hold this lock across
+        # agents.get -> check_replay -> federation_receive, and delete()
+        # must take it too — otherwise a delete landing between the
+        # handler's existence check and the receive's re-check burns
+        # the dispatch's body in the seen-store (or, landing between
+        # the attestation and run_agent's re-fetch, leaves a receipt
+        # for a job that never ran). An RLock: the handler re-enters
+        # through federation_receive's own agents.get.
+        self.lock = threading.RLock()
         self.fs.mkdir(AGENTS_DIR)
 
     def create(self, name: str, instructions: str,
@@ -112,6 +122,15 @@ class AgentRegistry:
             return json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
         except FSError:
             raise AgentError(f"unknown agent: {agent_id}") from None
+        except OSError:
+            # Round 27: a very long agent id makes the OS refuse the
+            # path itself (ENAMETOOLONG) before CrowFS can report "no
+            # such file" — that OSError escaped agents.get, and the
+            # /api/federation/run handler does not catch it, so the
+            # client saw a dropped connection instead of a 400. A
+            # lookup that cannot read the definition is an unknown
+            # agent, whatever the OS reason.
+            raise AgentError(f"unknown agent: {agent_id}") from None
         except json.JSONDecodeError:
             raise AgentError(f"corrupt agent definition: {agent_id}") from None
 
@@ -126,7 +145,15 @@ class AgentRegistry:
         return sorted(out, key=lambda a: a["created"])
 
     def delete(self, agent_id: str) -> None:
-        real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
-        if not real.exists():
-            raise AgentError(f"unknown agent: {agent_id}")
-        real.unlink()
+        # Round 28: take the registry lock so a delete cannot land
+        # inside a federated dispatch's validate -> record -> attest
+        # sequence (see server.py /api/federation/run). A delete that
+        # arrives first makes the dispatch refuse cleanly (400, body
+        # never recorded); a delete that arrives after validation
+        # waits, and the dispatch then runs with the agent as it was
+        # validated — the captured definition, not a re-fetch by id.
+        with self.lock:
+            real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
+            if not real.exists():
+                raise AgentError(f"unknown agent: {agent_id}")
+            real.unlink()
