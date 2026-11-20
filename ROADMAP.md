@@ -552,3 +552,65 @@ re-fetch the agent by id — a delete in that window would leave a
 routine.fired receipt for a run that raises. It was not probed
 or fixed this round (Round 29's scope was spawn + fleet); the
 captured-agent pass-through closes it the same way when probed.
+
+## v0.16.10 — routine firing: the last attest-before-validate path (shipped 2026-11-20)
+Round 30 probed the residual Round 29 left: Kernel.fire_routine.
+Its shape was worse than a race — it validated nothing at all:
+create job -> attest routine.fired -> mark_run (runs += 1) ->
+run_agent, which re-fetches the agent by id. create_routine
+validates the agent at creation time only, so an agent deleted
+afterwards put EVERY later fire on the missing-agent path,
+deterministically. The rest of the routine surface was read too:
+the serve() tick loop fires due routines on unguarded threads
+(no _guarded wrapper), and the HTTP surface has no run-now
+route — POST /api/routines validates via create_routine (400 on
+unknown agent, attests nothing), plus toggle/delete/list.
+Harness 30 against the unfixed tree: 3/8.
+- R2 deterministic (agent deleted after creation, fire twice):
+  routine.fired +2, job.created +2, runs=2, both fires raising
+  AgentError only AFTER attesting — false receipts, stranded
+  "running" jobs, no race required.
+- R3 delete-storm (24 fires): 24 attested, 19 attested-not-
+  completed, 19 stranded, 0 clean refusals.
+- R4 targeted (delete the moment routine.fired appears):
+  10 attested, 9 false, 9 stranded.
+- R5 bookkeeping: a refused fire still incremented runs and
+  moved last_run; firing a routine whose record was deleted
+  attested routine.fired +1, then mark_run raised RoutineError.
+- R7 tick loop: automatic ticks attested routine.fired +1 and
+  set runs=1 for a routine whose agent was gone.
+Fix (same mechanism as Rounds 28/29, no parallel one): the
+registry lock is held across validate -> create -> attest in
+fire_routine; the validated agent definition is captured and
+passed through run_agent's `agent` parameter; the routine's
+own existence is validated in the same section. The lock is
+released before the run. mark_run placement, stated plainly:
+immediately after the attestation, inside the lock — once
+attested, the fire is the point of no return (the run is
+guaranteed to start with the captured definition), so the
+bookkeeping is truthful there, and due() sees the new last_run
+at once so a concurrent tick cannot double-fire mid-run. A
+RoutineError from mark_run (record deleted in the sliver
+after validation) is moot bookkeeping and no longer strands
+the attested job.
+Probes: 8/8 after the fix (R3: 7 attested, 7 completed, 0
+false, 0 stranded, 17 clean refusals; R4: 10/10 completed;
+R7: two ticks, +0 attestations, runs stays 0, server fine).
+Totals: on-disk PASS lines sum to 225 edge probes (217
+through harness 29 + 8 new) + unit suite, all green via
+scripts/check.sh (harness 30 wired in). The running total
+quoted in earlier sections carries the known +5 offset
+against the on-disk sum and was not re-audited.
+Honest residual: the tick loop has no backoff for a routine
+whose agent is gone — every 5s tick spawns a thread that now
+refuses cleanly (no attestation, no bookkeeping), but it will
+keep trying, with a thread traceback in the server log, until
+the agent is recreated or the routine is disabled/deleted.
+That is arguably correct (recreate the agent and it fires),
+but it is noisy by design and was left as-is this round. A
+hard fs failure inside mark_run could likewise still raise
+after attestation — not probed; ledger appends share that
+exposure everywhere. With fire_routine fixed, every
+validate -> attest -> run path in the kernel (federation,
+spawn, fleet, HTTP spawn, routines) now uses the captured-
+definition pattern.
