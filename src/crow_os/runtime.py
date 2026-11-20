@@ -125,15 +125,31 @@ class Kernel:
         if depth > self.MAX_SPAWN_DEPTH:
             raise ValueError(
                 f"spawn depth cap ({self.MAX_SPAWN_DEPTH}) reached")
-        self.agents.get(agent_id)  # validate BEFORE attesting the spawn
-        child_id = self.workflow.create_job(
-            objective, chain=[agent_id, "governance"])
-        self._spawn_depth[child_id] = depth
-        self.ledger.append("crow-os/kernel", "agent.spawned", {
-            "parent_job_id": parent_job_id, "child_job_id": child_id,
-            "agent": agent_id, "depth": depth})
+        # Round 29: same race Round 28 closed for federation, found
+        # here by harness 29 (7 of 10 attested spawns in a delete-
+        # storm never ran, their child jobs stranded "running"). The
+        # validation used to DISCARD the fetched definition, attest
+        # agent.spawned, and let run_agent re-fetch by id — a delete
+        # landing in between left the attestation standing while
+        # run_agent raised AgentError. Now the registry lock (which
+        # agents.delete also takes) is held across validate -> create
+        # -> attest, the validated definition is captured, and the
+        # run uses it via run_agent's `agent` parameter. The lock is
+        # released before the run itself: a delete arriving after
+        # validation waits, then removes the agent, while the
+        # validated spawn still runs to completion; a delete arriving
+        # first gives a clean refusal with no attestation.
+        with self.agents.lock:
+            agent = self.agents.get(agent_id)  # validate BEFORE attesting
+            child_id = self.workflow.create_job(
+                objective, chain=[agent_id, "governance"])
+            self._spawn_depth[child_id] = depth
+            self.ledger.append("crow-os/kernel", "agent.spawned", {
+                "parent_job_id": parent_job_id, "child_job_id": child_id,
+                "agent": agent_id, "depth": depth})
         return self.run_agent(objective, agent_id, model=model,
-                              base_url=base_url, job_id=child_id)
+                              base_url=base_url, job_id=child_id,
+                              agent=agent)
 
     def run_agent(self, objective: str, agent_id: str,
                   model: str | None = None, base_url: str | None = None,
@@ -333,24 +349,35 @@ class Kernel:
         import threading as _threading
         if not agent_ids or len(agent_ids) > 8:
             raise ValueError("fleet needs 1..8 agents")
-        for aid in agent_ids:
-            self.agents.get(aid)  # validate the whole fleet first
-        if job_id is None:
-            job_id = self.workflow.create_job(
-                objective, chain=["fleet", "governance"])
-        members = []
-        for aid in agent_ids:
-            child_id = self.workflow.create_job(
-                objective, chain=[aid, "governance"])
-            self.ledger.append("crow-os/kernel", "fleet.member", {
-                "parent_job_id": job_id, "child_job_id": child_id,
-                "agent": aid})
-            members.append((aid, child_id))
+        # Round 29: same validate -> attest -> re-fetch race as
+        # spawn_subagent (harness 29's targeted delete-after-
+        # attestation phase: 64 of 64 attested members never ran and
+        # their child jobs were stranded "running", because the
+        # member threads' run_agent re-fetched by id after the
+        # delete). The registry lock is held across validate-all ->
+        # create -> attest-all, each validated definition is
+        # captured, and the member runs use the captured definitions.
+        # The lock is released before any member runs (same
+        # semantics as Round 28 / spawn above).
+        with self.agents.lock:
+            captured = {aid: self.agents.get(aid) for aid in agent_ids}
+            if job_id is None:
+                job_id = self.workflow.create_job(
+                    objective, chain=["fleet", "governance"])
+            members = []
+            for aid in agent_ids:
+                child_id = self.workflow.create_job(
+                    objective, chain=[aid, "governance"])
+                self.ledger.append("crow-os/kernel", "fleet.member", {
+                    "parent_job_id": job_id, "child_job_id": child_id,
+                    "agent": aid})
+                members.append((aid, child_id))
         results: dict[str, Any] = {}
         def _run(aid: str, cid: str) -> None:
             try:
                 results[cid] = self.run_agent(objective, aid, model=model,
-                                              base_url=base_url, job_id=cid)
+                                              base_url=base_url, job_id=cid,
+                                              agent=captured[aid])
             except Exception as e:  # noqa: BLE001 - a crashed member is a failed member
                 results[cid] = {"job_id": cid, "status": "failed",
                                 "error": f"{type(e).__name__}: {e}"}

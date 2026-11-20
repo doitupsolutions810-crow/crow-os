@@ -448,16 +448,28 @@ def make_handler(home: HomeServer):
                     parent = payload.get("parent")
                     if not isinstance(objective, str) or not objective.strip():
                         return self._json(400, {"error": "objective must be a non-empty string"})
-                    home.kernel.agents.get(agent_id)  # validate first
-                    child_id = home.kernel.workflow.create_job(
-                        objective, chain=[agent_id, "governance"])
-                    home.kernel.ledger.append("crow-os/kernel", "agent.spawned", {
-                        "parent_job_id": parent, "child_job_id": child_id,
-                        "agent": agent_id, "depth": 1})
+                    # Round 29: this handler duplicated spawn_subagent's
+                    # validate -> attest -> re-fetch pattern with a wider
+                    # window (the run happens on a thread): validate-
+                    # discard, attest agent.spawned, then run_agent
+                    # re-fetched by id — a delete in between left the
+                    # attestation standing for a job that then failed
+                    # on the re-fetch (harness 29 R8: 4 of 8 attested
+                    # HTTP spawns never ran). Hold the registry lock
+                    # across validate -> create -> attest, capture the
+                    # validated definition, and pass it to run_agent.
+                    with home.kernel.agents.lock:
+                        agent = home.kernel.agents.get(agent_id)
+                        child_id = home.kernel.workflow.create_job(
+                            objective, chain=[agent_id, "governance"])
+                        home.kernel.ledger.append("crow-os/kernel", "agent.spawned", {
+                            "parent_job_id": parent, "child_job_id": child_id,
+                            "agent": agent_id, "depth": 1})
                     t = threading.Thread(
                         target=home._guarded,
                         args=(child_id, lambda: home.kernel.run_agent(
-                            objective, agent_id, job_id=child_id)),
+                            objective, agent_id, job_id=child_id,
+                            agent=agent)),
                         daemon=True)
                     t.start(); home._threads.append(t)
                 except (ValueError, json.JSONDecodeError):
