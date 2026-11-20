@@ -275,7 +275,7 @@ Probes: R1/R5 replays refused 401, R2 stale ts refused, R3 tampered
 objective refused, R4 same-ts distinct objectives both run. Totals:
 173 probes + unit suite, all green via scripts/check.sh.
 
-## v0.16.3 — federation replay, concurrent (unpushed)
+## v0.16.3 — federation replay, concurrent (shipped)
 
 Round 22 probed the v0.16.2 replay fix under concurrency and restart,
 which Round 21 never did. Three real defects, all fixed:
@@ -298,3 +298,204 @@ which Round 21 never did. Three real defects, all fixed:
 C2 passed as-is: the seen-store survives a restart of the same home,
 replay still 401. Totals: 177 probes + unit suite, all green via
 scripts/check.sh (harness 22 wired in).
+
+## v0.16.4 — federation replay, future-dated dispatch (staged)
+
+Round 23 probed the v0.16.2/22 replay fix with a body it had never
+seen: a signed dispatch whose ts is in the FUTURE (sender clock
+~110s fast — verify_incoming accepts any ts within abs(now - ts) <=
+120s, for clock skew). One real defect, fixed:
+- F1 future-dated replay: check_replay() pruned the seen-store by
+  RECEIPT time, while verify_incoming judges staleness by the SIGNED
+  ts. A body dated receipt+110 was still verifiable at receipt+130
+  (abs diff 20), but its store entry had already pruned at
+  receipt+120 — so the captured dispatch ran a SECOND time, up to
+  ~240s after receipt. check_replay() now stores the signed ts
+  (not receipt time) and prunes once the signed ts is older than
+  MAX_SKEW; past ts+120 verify_incoming refuses the body as stale
+  anyway. Old stores hold receipt times (also epoch seconds), so the
+  same prune still applies to them.
+- F2/F3 controls pass as-is: a body with ts 130s old is refused 401
+  outright, and two distinct future-dated objectives both run.
+Totals: 180 probes + unit suite, all green via scripts/check.sh
+(harness 23 wired in).
+
+Round 24 stress-tested the v0.16.4 fix in the combinations Rounds
+21-23 never tried together — and found nothing: 8x concurrent
+identical future-dated (+110s) dispatches ran exactly once (7x401);
+a future-dated dispatch, home restart, then replay inside the
+window still 401 (entry survives restart ts-keyed); 4x concurrent
+distinct future-dated objectives sharing one ts all ran once each;
+a normal dispatch after future-dated traffic still runs. Totals:
+184 probes + unit suite, all green via scripts/check.sh
+(harness 24 wired in). No code change — v0.16.4 stands as staged.
+Superseded before push by v0.16.5 (Round 25 below) — v0.16.4's
+fix ships inside v0.16.5, so one push carries both.
+
+## v0.16.5 — federation payload types, incl. NaN-ts replay (staged)
+Superseded before push by v0.16.6 (Round 26 below) — v0.16.5's
+fix ships inside v0.16.6, so one push carries both.
+
+Round 25 probed the federation surface Rounds 21-24 never touched:
+malformed-but-signed bodies. verify_incoming checked presence +
+signature + staleness, never TYPES, and /api/federation/run is
+synchronous and unguarded. Real defects, all reproduced end-to-end
+before the fix, all fixed:
+- F1 dropped connections: ts of None / list / dict raised TypeError
+  in float(), which the handler does not catch — the client saw a
+  dropped connection, no HTTP status. Same for a sig of int / dict
+  (TypeError in bytes.fromhex inside Identity.verify).
+- F2 false attestation: objective of int / None passed verification
+  and the replay check, federation.received was attested, THEN
+  run_agent crashed on objective.splitlines() — a receipt in the
+  ledger for a job that never ran.
+- F3 unbounded replay: ts=NaN. abs(now - NaN) > MAX_SKEW is False,
+  so the body never went stale, while the prune pass
+  (now - v <= MAX_SKEW, also False for NaN) dropped its seen-store
+  entry on the next call. One signed NaN-ts body ran three times,
+  three distinct jobs — the replay protection Rounds 21-24 built
+  did not apply to it at all.
+- F4 type confusion: a numeric-string ts was accepted and ran.
+Fix: verify_incoming now requires from/agent/objective to be
+strings, ts to be a finite number (bool and numeric strings
+refused), and sig to be a string — wrong types refuse 401 before
+any attestation or run. Identity.verify also catches TypeError,
+check_replay treats a non-finite stored ts as now, and
+federation_receive re-checks agent/objective types before
+attesting, so a direct caller cannot leave a false receipt either.
+Probes: 11/11 (R1-R5, R9-R10 malformed fields 401; R6 NaN refused
+on first send and replay; R7-R8 no false attestation; R11 control
+normal dispatch 200 with exactly one attestation). Totals: 195
+probes + unit suite, all green via scripts/check.sh (harness 25
+wired in).
+
+## v0.16.6 — blank federation fields + malformed shapes in combination (staged)
+
+Round 26 stress-tested the v0.16.5 fix under the combined
+conditions that broke every earlier replay fix — concurrency,
+restart, future-dated, mixed valid/malformed traffic — and
+probed the shapes Round 25 never sent. 6/7 green on first run;
+it caught one real defect:
+- F5 blank objective, false attestation + dropped connection:
+  objective="" is a string, so it passed the Round-25 type check,
+  passed the replay check, and federation.received was attested —
+  THEN workflow.create_job refused it ("objective must be a
+  non-empty string", WorkflowError, which the /api/federation/run
+  handler does not catch), so the client saw a dropped connection
+  and the ledger kept a receipt for a job that never ran. Same
+  shape as the Round-25 non-string objective, one field-value
+  further along. Reproduced end-to-end before the fix.
+Fix: verify_incoming now requires from/agent/objective to be
+non-empty after strip (401 at the federation boundary, before
+any attestation or run), and federation_receive re-checks
+non-emptiness before attesting, so a direct caller cannot leave
+a false receipt either. The other Round-25 edge is closed too:
+ts=+Infinity / -Infinity / 1e400 all refuse 401 with no
+attestation (NaN's untested sibling — same "every comparison
+is False" logic, now probed).
+Probes: 7/7 (R1 Infinity variants 401; R2 8x concurrent identical
+NaN all 401, no jobs; R3 mixed burst 4 valid run once each, 4
+malformed 401; R4 NaN refused before and after restart, valid
+control runs; R5 malformed bodies sharing a ts do not poison the
+seen-store for a later valid dispatch, same-ts and future-dated;
+R6 blank objective/agent 401, no attestation; R7 control normal
+dispatch 200 with exactly one attestation). Totals: 202 probes
++ unit suite, all green via scripts/check.sh (harness 26 wired
+in). Includes the v0.16.5 fix, so one push carries both.
+Superseded before push by v0.16.7 (Round 27 below) — v0.16.6's
+fix ships inside v0.16.7, so one push carries all three.
+
+## v0.16.7 — unknown-agent replay poison + oversized agent id crash (staged)
+
+Round 27 probed the validation that still ran AFTER the replay
+check — agent existence, which Rounds 25-26 never sent, since
+every earlier harness only ever dispatched to an agent that
+existed. 3/7 green on first run; it caught two real defects:
+- F1 unknown-agent dispatch poisoned the seen-store: the handler
+  ran verify_incoming -> check_replay -> federation_receive, and
+  agents.get (the first agent-existence check) lives in
+  federation_receive — so a signed dispatch to an agent that did
+  not exist yet was recorded in the seen-store FIRST, then refused
+  400. Creating the agent and resending the identical signed body
+  inside the 120s window then hit 401 "replayed", even though the
+  job never ran and was never attested. A corrupt agent definition
+  hit the same path, and the poison survived restart because the
+  seen-store is persisted in CrowFS. Same class as the Round-26
+  R5 store-poison rule, one validation later in the chain.
+  Reproduced end-to-end before the fix (R1/R2/R5 all 401 on retry).
+- F2 oversized agent id dropped the connection: agent="x"*500 made
+  the OS refuse the definition path itself (ENAMETOOLONG) before
+  CrowFS could report "no such file" — that OSError escaped
+  agents.get, which the /api/federation/run handler does not catch,
+  so the client saw a dropped connection instead of a 400. Same
+  shape as the Round-25 wrong-typed-field crash.
+Fix: the handler now validates agent existence (agents.get) after
+signature verification but BEFORE check_replay, so a refused body
+never consumes a seen-store slot; federation_receive still
+re-checks before attesting, so a direct caller is covered too.
+agents.get now converts an OSError on the definition read into
+"unknown agent" (400) instead of letting it crash the handler.
+One honest residual: an agent deleted between the handler's check
+and federation_receive still burns the body — closing that needs
+a lock across the two, and agent deletion mid-dispatch is an
+operator action, not a peer one. Also fixed in this staging:
+pyproject.toml still said 0.16.5 while __init__ said 0.16.6 (the
+Round-26 bump missed it); both now say 0.16.7.
+Probes: 7/7 (R1 unknown agent, create, same body retries 200;
+R2 corrupt definition, repair, same body retries 200; R3 8x
+concurrent unknown agent all 400, none burns a slot; R4 ghost
+sharing a ts does not block a valid dispatch; R5 poison does not
+survive restart — same body retries 200 after restart+create;
+R6 traversal/oversized agent ids all 400, no attestation, server
+alive; R7 control normal dispatch 200 with exactly one
+attestation). Totals: 209 probes + unit suite, all green via
+scripts/check.sh (harness 27 wired in). Includes the v0.16.5 and
+v0.16.6 fixes, so one push carries all three.
+Superseded before push by v0.16.8 (Round 28 below) — v0.16.7's
+fix ships inside v0.16.8, so one push carries all four.
+
+## v0.16.8 — delete-mid-dispatch race: burned bodies + false attestations (shipped 2026-11-20)
+
+Round 28 probed the honest residual Round 27 stated in server.py:
+an agent deleted between the handler's existence check and
+federation_receive still burns the body. 1/5 green on first run
+(R3 failed); it caught both halves of the race:
+- W1  delete landing between the handler check and
+  federation_receive's re-check: the receive raised AgentError ->
+  400, but check_replay had already recorded the body, so
+  recreating the agent and resending the identical signed body hit
+  401 "replayed" for a job that never ran and was never attested.
+  15 of 48 storm bodies burned this way. The window is not
+  microscopic — check_replay's CrowFS read + write of the
+  seen-store sits between the two checks.
+- W2  delete landing between the attestation and run_agent's
+  re-fetch by id: the ledger already held federation.received,
+  then run_agent raised AgentError -> 400 — a receipt for a job
+  that never ran, the false-attestation class Rounds 25-26 closed
+  for malformed shapes. The storm left 5 excess attestations
+  against 0 jobs run. The burn persisted across restart (R4: the
+  burned body still 401 after restart + recreate), because the
+  seen-store lives in CrowFS.
+Fix: the handler now holds the AgentRegistry lock across
+agents.get -> check_replay -> federation_receive, agents.delete
+takes the same lock, and the validated agent definition is captured
+and passed through federation_receive into run_agent (new optional
+`agent` parameter on both) — so the attestation and the run use the
+agent as validated, never a re-fetch by id. The lock is released
+before the run itself: a delete arriving after validation waits,
+then removes the agent, while the already-validated dispatch still
+runs to completion; a delete arriving first makes the dispatch
+refuse cleanly (400, body never recorded).
+Probes: 5/5 (R1 control 200, +1 attestation; R2 Round-27 regression
+still holds; R3 delete-storm: 48 dispatches, 15 ran, 33 clean
+refusals that all resend 200, 0 burned, 0 excess attestations; R4
+no burns to persist; R5 control 200, +1 attestation, ledger ok).
+Totals: 214 probes + unit suite, all green via scripts/check.sh
+(harness 28 wired in). Includes the v0.16.5, v0.16.6 and v0.16.7
+fixes, so one push carries all four.
+One honest residual, same class one step out: spawn_subagent and
+fleet_run also validate an agent, attest, then re-fetch it in
+run_agent — a delete in that window leaves agent.spawned /
+fleet.member receipts for a member that never ran. The captured-
+agent pass-through now exists to close those the same way; they
+have no dedicated probe yet.

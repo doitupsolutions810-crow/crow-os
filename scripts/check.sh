@@ -6,7 +6,7 @@ PY="${1:-python3}"
 cd "$(dirname "$0")/.."
 echo "== unit tests"
 $PY -m unittest discover -s tests
-for h in probes/edge_harness.py probes/edge_harness2.py probes/edge_harness3.py probes/edge_harness4.py probes/edge_harness5.py probes/edge_harness6.py probes/edge_harness7.py probes/edge_harness8.py probes/edge_harness9.py probes/edge_harness10.py probes/edge_harness11.py probes/edge_harness12.py probes/edge_harness13.py probes/edge_harness14.py probes/edge_harness15.py probes/edge_harness16.py probes/edge_harness17.py probes/edge_harness18.py probes/edge_harness19.py probes/edge_harness20.py probes/edge_harness21.py probes/edge_harness22.py probes/stub_harness.py; do
+for h in probes/edge_harness.py probes/edge_harness2.py probes/edge_harness3.py probes/edge_harness4.py probes/edge_harness5.py probes/edge_harness6.py probes/edge_harness7.py probes/edge_harness8.py probes/edge_harness9.py probes/edge_harness10.py probes/edge_harness11.py probes/edge_harness12.py probes/edge_harness13.py probes/edge_harness14.py probes/edge_harness15.py probes/edge_harness16.py probes/edge_harness17.py probes/edge_harness18.py probes/edge_harness19.py probes/edge_harness20.py probes/edge_harness21.py probes/edge_harness22.py probes/edge_harness23.py probes/edge_harness24.py probes/edge_harness25.py probes/edge_harness26.py probes/edge_harness27.py probes/edge_harness28.py probes/stub_harness.py; do
   echo "== $h"
   $PY "$h" 2>/dev/null | tail -1
 done
