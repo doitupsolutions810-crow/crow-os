@@ -499,3 +499,56 @@ run_agent — a delete in that window leaves agent.spawned /
 fleet.member receipts for a member that never ran. The captured-
 agent pass-through now exists to close those the same way; they
 have no dedicated probe yet.
+
+## v0.16.9 — spawn/fleet delete race: attested members that never ran (shipped 2026-11-20)
+
+Round 29 probed the honest residual v0.16.8's section stated:
+spawn_subagent and fleet_run also validate an agent, attest, then
+re-fetch it in run_agent. Reading the code firsthand confirmed the
+pattern in three places — both validation results were DISCARDED:
+- Kernel.spawn_subagent: agents.get (discarded) -> create child ->
+  agent.spawned attested -> run_agent re-fetches by id.
+- Kernel.fleet_run: agents.get each member (discarded) -> create
+  children -> fleet.member attested for each -> member threads'
+  run_agent re-fetches by id.
+- HTTP /api/spawn (server.py) duplicated the spawn pattern with a
+  wider window: validate-discard -> create -> attest -> run on a
+  thread -> run_agent re-fetch. (HTTP /api/fleet only pre-validates
+  and attests nothing, so the kernel fix covers it.)
+Harness 29 against the unfixed tree: 5/8. The race reproduced in
+all three paths:
+- R3 spawn storm (48 calls, waves of 8, delete+recreate loop):
+  10 attested, 7 attested-not-completed, all 7 child jobs stranded
+  "running"; the caller saw a plain AgentError, indistinguishable
+  from a clean refusal — only the ledger told them apart.
+- R6 fleet: a continuous storm alone attested nothing (the agent
+  was almost always missing at the validation instant, so fleets
+  refused cleanly — stated honestly), but a targeted phase that
+  deletes the moment the first fleet.member entry appears in the
+  ledger hit the window every time: 64 of 64 attested members
+  never ran, all 64 child jobs stranded "running", all 16 fleet
+  parents reporting "failed" for members the ledger says joined.
+- R8 HTTP spawn storm (32 posts): 8 attested, 4 never ran.
+Fix (same mechanism as Round 28, no parallel one): the registry
+lock is held across validate -> create -> attest in
+spawn_subagent, fleet_run, and the /api/spawn handler; the
+validated definitions are captured and passed through run_agent's
+existing `agent` parameter (fleet captures one per member). The
+lock is released before any run: a delete arriving after
+validation waits, then removes the agent, while the validated
+run completes; a delete arriving first refuses cleanly with no
+attestation.
+Probes: 8/8 after the fix (R3: 25 attested, 25 completed, 0
+false, 23 clean refusals; R6: 68 attested members, 68 completed,
+0 stranded — targeted phase 16/16 fleets completed; R8: 11
+attested, 11 completed, 0 false). Totals: on-disk PASS lines sum
+to 217 edge probes (209 through harness 28 + 8 new) + unit suite,
+all green via scripts/check.sh (harness 29 wired in). The running
+total quoted in earlier sections (214) carries the known +5
+offset against the on-disk sum and was not re-audited.
+One honest residual, same class one step out: Kernel.fire_routine
+also creates a job, attests routine.fired, then lets run_agent
+re-fetch the agent by id — a delete in that window would leave a
+routine.fired receipt for a run that raises. It was not probed
+or fixed this round (Round 29's scope was spawn + fleet); the
+captured-agent pass-through closes it the same way when probed.
