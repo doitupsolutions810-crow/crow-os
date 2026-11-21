@@ -107,13 +107,13 @@ class LLMWorker:
                 previous_artifact = artifact
                 artifact = self.client.chat_stream(
                     PROMPTS["coder"],
-                    f"Objective: {objective}\\nPlan:\\n{plan}\\n{context}"
-                    f"Plan reference line: {plan_reference}\\n"
+                    f"Objective: {objective}\nPlan:\n{plan}\n{context}"
+                    f"Plan reference line: {plan_reference}\n"
                     "Your previous artifact omitted the required plan reference. "
                     "Return the corrected artifact, preserving its useful content, "
                     f"and include the exact literal line `# {plan_reference}` "
-                    "on its own line. Do not invent or alter the reference.\\n"
-                    f"Previous artifact:\\n{previous_artifact}",
+                    "on its own line. Do not invent or alter the reference.\n"
+                    f"Previous artifact:\n{previous_artifact}",
                     on_token=(lambda t: outputs[job_id].__setitem__(
                         "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
             reference_present = plan_reference in artifact
