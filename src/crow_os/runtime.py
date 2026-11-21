@@ -143,7 +143,7 @@ class Kernel:
             return  # best-effort; the job already completed
         self.ledger.append("crow-os/tools", "tool.invoked", {
             "job_id": job_id, "tool": rec["tool"], "path": rec["path"],
-            "bytes": rec["bytes"]})
+            "bytes": rec["bytes"], "by": "kernel"})
         self.outputs[job_id]["saved_to"] = rec["path"]
 
     def run_llm(self, objective: str, model: str | None = None,
