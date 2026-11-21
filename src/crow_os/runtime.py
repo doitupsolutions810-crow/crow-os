@@ -116,6 +116,7 @@ class Kernel:
         self.plugins = PluginRegistry(self.fs)  # connect-apps catalog
         self.routines = RoutineStore(self.fs)  # scheduled agent runs
         self.connectors = ConnectorRegistry(self.fs, self.home)
+        self.agents.set_extra_tools_provider(self.connectors.tool_names)
         self.peers = PeerStore(self.fs)  # federation peer registry
         self._identity: Identity | None = None
         self._identity_error: str | None = None
