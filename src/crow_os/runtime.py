@@ -26,7 +26,7 @@ from .federation import (FederationError, Identity, PeerStore,
 from .fs import CrowFS
 from .ledger import Ledger
 from .signers import HmacSigner
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient
+from .llm import DEFAULT_BASE, DEFAULT_MODEL, OllamaClient, resolve_model
 from .workflow import Workflow
 from .worker import LLMWorker
 
@@ -151,8 +151,9 @@ class Kernel:
                 job_id: str | None = None,
                 tools_enabled: bool = True) -> dict[str, Any]:
         """Full chain with an LLM behind the capability gate (v0.2)."""
+        selected_model = resolve_model(model, base_url or DEFAULT_BASE)
         client = OllamaClient(base_url=base_url or DEFAULT_BASE,
-                              model=model or DEFAULT_MODEL)
+                              model=selected_model)
         cap = self.broker.issue(
             "crow-os/kernel",
             [{"method": "EXECUTE", "resource": "jobs.debugger"},
@@ -242,8 +243,9 @@ class Kernel:
                    for t in agent.get("tools") or []]
         cap = self.broker.issue("crow-os/kernel", rights,
                                 ttl_seconds=900, rate_limit=20)
+        selected_model = resolve_model(model or agent.get("model"), base_url or DEFAULT_BASE)
         client = OllamaClient(base_url=base_url or DEFAULT_BASE,
-                              model=model or agent.get("model") or DEFAULT_MODEL)
+                              model=selected_model)
         from .tools import ToolRunner
         tools = ToolRunner(self.broker, cap,
                            allow_private=self.allow_private_tools) \
