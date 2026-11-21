@@ -52,11 +52,12 @@ class HomeServer:
 
     def status(self) -> dict[str, Any]:
         verdict = self.kernel.ledger.verify()
+        ollama = self.model_info()
         return {
             "version": __version__,
             "home": str(self.kernel.home),
-            "model": DEFAULT_MODEL,
-            "ollama": self.model_info(),
+            "model": ollama["active"],
+            "ollama": ollama,
             "ledger": {"ok": verdict["ok"], "entries": verdict["entries"],
                        "errors": verdict["errors"][:5]},
             "jobs": len(self.kernel.workflow.jobs()),
