@@ -18,7 +18,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
+from .llm import (DEFAULT_BASE, DEFAULT_MODEL, MODEL_FROM_ENV, LLMUnavailable,
+                  OllamaClient, pick_local_model, same_model)
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
@@ -36,9 +37,11 @@ class HomeServer:
         client = OllamaClient()
         try:
             h = client.health()
-            return {"reachable": True, "base": DEFAULT_BASE,
-                    "active": DEFAULT_MODEL, "installed": h["models"],
-                    "active_installed": h["model_present"]}
+            active = DEFAULT_MODEL if MODEL_FROM_ENV else (
+                pick_local_model(h["models"], DEFAULT_MODEL) or DEFAULT_MODEL)
+            return {"reachable": True, "base": client.base_url,
+                    "active": active, "installed": h["models"],
+                    "active_installed": any(same_model(active, name) for name in h["models"])}
         except LLMUnavailable as e:
             return {"reachable": False, "base": DEFAULT_BASE,
                     "active": DEFAULT_MODEL, "installed": [],
@@ -46,11 +49,12 @@ class HomeServer:
 
     def status(self) -> dict[str, Any]:
         verdict = self.kernel.ledger.verify()
+        model_info = self.model_info()
         return {
             "version": __version__,
             "home": str(self.kernel.home),
-            "model": DEFAULT_MODEL,
-            "ollama": self.model_info(),
+            "model": model_info["active"],
+            "ollama": model_info,
             "ledger": {"ok": verdict["ok"], "entries": verdict["entries"],
                        "errors": verdict["errors"][:5]},
             "jobs": len(self.kernel.workflow.jobs()),
@@ -67,19 +71,23 @@ class HomeServer:
         # chain implementation executes it in a thread. There is no
         # second copy of the chain logic here to drift out of sync.
         if agent_id:
-            agent = self.kernel.agents.get(agent_id)  # AgentError -> 400
-            job_id = self.kernel.workflow.create_job(
-                objective, chain=[agent_id, "governance"])
+            with self.kernel.agents.lock:
+                agent = self.kernel.agents.get(agent_id)  # AgentError -> 400
+                job_id = self.kernel.workflow.create_job(
+                    objective, chain=[agent_id, "governance"])
             target = lambda: self.kernel.run_agent(  # noqa: E731
                 objective, agent_id, model=model, job_id=job_id,
-                tools_enabled=tools_enabled)
+                tools_enabled=tools_enabled, agent=agent)
             t = threading.Thread(target=self._guarded, args=(job_id, target), daemon=True)
             t.start()
             self._threads.append(t)
             return {"started": True, "mode": "agent", "agent": agent["id"],
                     "job": self.kernel.workflow.get(job_id)}
         if mode == "auto":
-            mode = "llm" if self.model_info()["reachable"] else "demo"
+            info = self.model_info()
+            mode = "llm" if info["reachable"] and info["active_installed"] else "demo"
+            if mode == "llm" and model is None:
+                model = info["active"]
         job_id = self.kernel.workflow.create_job(objective)
         if mode == "llm":
             target = lambda: self.kernel.run_llm(objective, model=model, job_id=job_id, tools_enabled=tools_enabled)  # noqa: E731
@@ -125,7 +133,35 @@ def make_handler(home: HomeServer):
             self.end_headers()
             self.wfile.write(body)
 
+        def _guard(self, operation):
+            try:
+                return operation()
+            except (BrokenPipeError, ConnectionResetError):
+                return None
+            except Exception:
+                # A malformed request or corrupt file must not silently drop HTTP.
+                # Details remain local; the response does not expose host paths/secrets.
+                return self._json(500, {"error": "Unexpected server error"})
+
+        def _body(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if not 0 <= length <= 1_000_000:
+                raise ValueError("invalid body length")
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError("body must be an object")
+            return payload
+
         def do_GET(self):  # noqa: N802
+            return self._guard(self._get)
+
+        def do_POST(self):  # noqa: N802
+            return self._guard(self._post)
+
+        def do_DELETE(self):  # noqa: N802
+            return self._guard(self._delete)
+
+        def _get(self):
             u = urlparse(self.path)
             if u.path == "/":
                 body = HOME_HTML.read_bytes()
@@ -231,7 +267,7 @@ def make_handler(home: HomeServer):
             else:
                 self._json(404, {"error": "not found"})
 
-        def do_DELETE(self):  # noqa: N802
+        def _delete(self):
             u = urlparse(self.path)
             if u.path.startswith("/api/routines/"):
                 from .routines import RoutineError
@@ -256,13 +292,12 @@ def make_handler(home: HomeServer):
                     return self._json(404, {"error": str(e)})
             return self._json(404, {"error": "not found"})
 
-        def do_POST(self):  # noqa: N802
+        def _post(self):
             u = urlparse(self.path)
             if u.path == "/api/agents":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     agent = home.kernel.agents.create(
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
@@ -278,8 +313,7 @@ def make_handler(home: HomeServer):
                 from .routines import RoutineError
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     if u.path == "/api/routines":
                         routine = home.kernel.create_routine(
                             payload.get("name"), payload.get("agent"),
@@ -299,8 +333,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/fleet":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     objective = payload.get("objective")
                     agents = payload.get("agents")
                     if not isinstance(objective, str) or not objective.strip():
@@ -325,8 +358,7 @@ def make_handler(home: HomeServer):
             if u.path.startswith("/api/connectors/"):
                 from .connectors import ConnectorError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     status = home.kernel.connectors.configure(
                         u.path.rsplit("/", 1)[-1], payload.get("base_url"))
                 except (ValueError, json.JSONDecodeError):
@@ -337,8 +369,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/peers":
                 from .federation import FederationError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     peer = home.kernel.peers.register(
                         payload.get("name"), payload.get("url"),
                         payload.get("pubkey"))
@@ -350,8 +381,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/federation/dispatch":
                 from .federation import FederationError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     reply = home.kernel.federation_dispatch(
                         payload.get("peer"), payload.get("agent"),
                         payload.get("objective"))
@@ -364,8 +394,7 @@ def make_handler(home: HomeServer):
                 from .federation import FederationError, verify_incoming
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     peer = verify_incoming(home.kernel.peers, payload)
                     # Round 27: agent existence is validated BEFORE the
                     # replay check. federation_receive used to be the
@@ -416,8 +445,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/plugins":
                 from .plugins import PluginError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     home.kernel.plugins.set_asserted(
                         payload.get("id"), bool(payload.get("connected")))
                 except (ValueError, json.JSONDecodeError):
@@ -428,8 +456,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/devices":
                 from .devices import DeviceError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     device = home.kernel.devices.register(
                         payload.get("name"), payload.get("kind", "device"),
                         payload.get("address", ""))
@@ -441,8 +468,7 @@ def make_handler(home: HomeServer):
             if u.path == "/api/spawn":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body()
                     agent_id = payload.get("agent")
                     objective = payload.get("objective")
                     parent = payload.get("parent")
@@ -480,8 +506,7 @@ def make_handler(home: HomeServer):
             if u.path != "/api/run":
                 return self._json(404, {"error": "not found"})
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._body()
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "body must be JSON"})
             objective = payload.get("objective")

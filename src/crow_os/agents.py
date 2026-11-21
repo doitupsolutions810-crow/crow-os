@@ -51,6 +51,17 @@ class AgentError(Exception):
     pass
 
 
+def _agent_id(agent_id: str) -> str:
+    if not isinstance(agent_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,120}", agent_id):
+        raise AgentError("invalid agent id")
+    return agent_id
+
+
+def _has_control(value: str, allow_multiline: bool = False) -> bool:
+    allowed = "\n\r\t" if allow_multiline else ""
+    return any((ord(c) < 32 or ord(c) == 127) and c not in allowed for c in value)
+
+
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug or "agent"
@@ -77,15 +88,25 @@ class AgentRegistry:
                extra_tools: list[str] | None = None) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise AgentError("agent name is required")
+        if _has_control(name):
+            raise AgentError("agent name contains control characters")
         name = name.strip()
         if len(name) > MAX_NAME:
             raise AgentError(f"name too long (max {MAX_NAME} chars)")
         if not isinstance(instructions, str) or not instructions.strip():
             raise AgentError("custom instructions are required")
+        if _has_control(instructions, allow_multiline=True):
+            raise AgentError("instructions contain control characters")
         instructions = instructions.strip()
         if len(instructions) > MAX_INSTRUCTIONS:
             raise AgentError(
                 f"instructions too long (max {MAX_INSTRUCTIONS} chars)")
+        if model is not None and (not isinstance(model, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}", model)):
+            raise AgentError("model must be a model name")
+        if tools is not None and (not isinstance(tools, list) or any(not isinstance(t, str) for t in tools)):
+            raise AgentError("tools must be a list of tool names")
+        if avatar is not None and not isinstance(avatar, dict):
+            raise AgentError("avatar must be an object")
         grants = []
         catalog = TOOLS + list(extra_tools or [])
         for t in tools or []:
@@ -96,30 +117,37 @@ class AgentRegistry:
         base = _slugify(name)
         if base in RESERVED:
             raise AgentError(f"'{name}' collides with a built-in role")
-        agent_id, n = base, 2
-        while self.fs.exists(f"{AGENTS_DIR}/{agent_id}.json"):
-            agent_id = f"{base}-{n}"
-            n += 1
         look = dict(DEFAULT_AVATAR)
         if avatar:
             if avatar.get("shape") is not None:
-                if avatar["shape"] not in AVATAR_SHAPES:
+                if not isinstance(avatar["shape"], str) or avatar["shape"] not in AVATAR_SHAPES:
                     raise AgentError(f"unknown avatar shape {avatar['shape']!r}")
                 look["shape"] = avatar["shape"]
             if avatar.get("color") is not None:
-                if avatar["color"] not in AVATAR_COLORS:
+                if not isinstance(avatar["color"], str) or avatar["color"] not in AVATAR_COLORS:
                     raise AgentError(f"unknown avatar color {avatar['color']!r}")
                 look["color"] = avatar["color"]
-        agent = {"id": agent_id, "name": name, "instructions": instructions,
-                 "model": model or None, "tools": grants, "avatar": look,
-                 "created": time.time()}
-        self.fs.write_file(f"{AGENTS_DIR}/{agent_id}.json",
-                           json.dumps(agent, indent=2))
-        return agent
+        # Choosing the filename and writing the definition form one operation.
+        # The same lock also protects deletion and federated dispatch snapshots.
+        with self.lock:
+            agent_id, n = base, 2
+            while self.fs.exists(f"{AGENTS_DIR}/{agent_id}.json"):
+                agent_id = f"{base}-{n}"
+                n += 1
+            agent = {"id": agent_id, "name": name, "instructions": instructions,
+                     "model": model or None, "tools": grants, "avatar": look,
+                     "created": time.time()}
+            self.fs.write_file(f"{AGENTS_DIR}/{agent_id}.json",
+                               json.dumps(agent, indent=2))
+            return agent
 
     def get(self, agent_id: str) -> dict[str, Any]:
+        _agent_id(agent_id)
         try:
-            return json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
+            agent = json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
+            if not isinstance(agent, dict) or not isinstance(agent.get("name"), str) or not isinstance(agent.get("instructions"), str):
+                raise AgentError(f"corrupt agent definition: {agent_id}")
+            return agent
         except FSError:
             raise AgentError(f"unknown agent: {agent_id}") from None
         except OSError:
@@ -142,7 +170,7 @@ class AgentRegistry:
                     out.append(self.get(e["name"][:-5]))
                 except AgentError:
                     continue
-        return sorted(out, key=lambda a: a["created"])
+        return sorted(out, key=lambda a: a.get("created") if isinstance(a.get("created"), (int, float)) else 0)
 
     def delete(self, agent_id: str) -> None:
         # Round 28: take the registry lock so a delete cannot land
@@ -152,6 +180,7 @@ class AgentRegistry:
         # never recorded); a delete that arrives after validation
         # waits, and the dispatch then runs with the agent as it was
         # validated — the captured definition, not a re-fetch by id.
+        _agent_id(agent_id)
         with self.lock:
             real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
             if not real.exists():

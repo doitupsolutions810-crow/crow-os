@@ -18,6 +18,7 @@ So the network tools here are built like everything else in Crow OS:
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
 import urllib.error
@@ -40,12 +41,94 @@ class ToolError(Exception):
 
 
 def _ip_blocked(ip_text: str) -> bool:
+    # Scoped addresses are meaningful only on a host's local interfaces.
+    if "%" in ip_text:
+        return True
     try:
         ip = ipaddress.ip_address(ip_text)
     except ValueError:
         return True
-    return (ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
+    if (not ip.is_global or ip.is_multicast or ip.is_reserved
+            or ip.is_loopback or ip.is_link_local or ip.is_unspecified):
+        return True
+    if isinstance(ip, ipaddress.IPv6Address):
+        # Translation/tunnel addresses must not smuggle a non-public IPv4
+        # destination past the IPv6 classification.
+        embedded = ip.ipv4_mapped or ip.sixtofour
+        if embedded is not None and _ip_blocked(str(embedded)):
+            return True
+        if ip in ipaddress.ip_network("64:ff9b::/96"):
+            if _ip_blocked(str(ipaddress.IPv4Address(int(ip) & 0xffffffff))):
+                return True
+        if ip in ipaddress.ip_network("64:ff9b:1::/48") or ip.teredo:
+            return True
+    return False
+
+
+def _pinned_create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+                              source_address=None, *, allow_private=False):
+    """Resolve once at connect time, validate all answers, dial numeric tuples.
+
+    No second hostname resolution occurs between the check and socket.connect.
+    This is per connection rather than a global socket monkeypatch, so other
+    threads and explicitly opted-in private tools retain their own policy.
+    """
+    host, port = address
+    try:
+        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise ToolError(f"cannot resolve {host}: {e}") from e
+    if not infos:
+        raise ToolError(f"cannot resolve {host}: no addresses")
+    if not allow_private:
+        for _, _, _, _, sockaddr in infos:
+            if _ip_blocked(sockaddr[0]):
+                raise ToolError(f"{host} resolves to a non-public address ({sockaddr[0]}); refused")
+    last_error = None
+    for family, socktype, proto, _, sockaddr in infos:
+        sock = None
+        try:
+            sock = socket.socket(family, socktype, proto)
+            if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as e:
+            last_error = e
+            if sock is not None:
+                sock.close()
+    raise last_error or OSError("no usable addresses")
+
+
+class _GuardedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, allow_private: bool):
+        super().__init__()
+        self._allow_private = allow_private
+
+    def http_open(self, req):
+        def connection(*args, **kwargs):
+            conn = http.client.HTTPConnection(*args, **kwargs)
+            conn._create_connection = lambda *a, **kw: _pinned_create_connection(
+                *a, **kw, allow_private=self._allow_private)
+            return conn
+        return self.do_open(connection, req)
+
+
+class _GuardedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, allow_private: bool):
+        super().__init__()
+        self._allow_private = allow_private
+
+    def https_open(self, req):
+        def connection(*args, **kwargs):
+            conn = http.client.HTTPSConnection(*args, **kwargs)
+            conn._create_connection = lambda *a, **kw: _pinned_create_connection(
+                *a, **kw, allow_private=self._allow_private)
+            return conn
+        # Keep the original hostname for TLS SNI and certificate validation.
+        return self.do_open(connection, req, context=self._context)
 
 
 def _resolve_checked(host: str, allow_private: bool) -> list[str]:
@@ -107,6 +190,11 @@ class ToolRunner:
             raise ToolError("URL has no host")
         _resolve_checked(host, self.allow_private)
         opener = urllib.request.build_opener(
+            # Proxy endpoints would hide the actual target address from this
+            # connection guard. Network tools always connect directly.
+            urllib.request.ProxyHandler({}),
+            _GuardedHTTPHandler(self.allow_private),
+            _GuardedHTTPSHandler(self.allow_private),
             _GuardedRedirectHandler(self.allow_private))
         req = urllib.request.Request(
             url, headers={"User-Agent": "CrowOS/0.6 net.fetch"})
