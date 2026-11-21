@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -121,6 +122,7 @@ class ChatWorkspace:
         self.publish = publish or (lambda _thread_id, _event: None)
         self._flags: dict[str, threading.Event] = {}
         self._procs: dict[str, subprocess.Popen[str]] = {}
+        self._threads: dict[str, threading.Thread] = {}
         self._lock = threading.Lock()
 
     def connectors(self) -> dict[str, Any]:
@@ -214,19 +216,30 @@ class ChatWorkspace:
         thread = self.ws.store.query_one("SELECT * FROM chat_threads WHERE id=?", (thread_id,))
         if thread is None:
             raise KeyError(thread_id)
+        with self._lock:
+            active = self._threads.get(thread_id)
+            if thread.get("status") == "running" or (active is not None and active.is_alive()):
+                raise ValueError("this agent thread already has an active turn")
+            self._flags.setdefault(thread_id, threading.Event()).clear()
+            worker = None
+            if background:
+                worker = threading.Thread(
+                    target=self._guarded_turn, args=(thread_id,), name=f"chat-{thread_id}", daemon=True
+                )
+                self._threads[thread_id] = worker
         self.ws.store.execute(
             "INSERT INTO chat_messages (thread_id, role, content, created_at) VALUES (?, 'user', ?, ?)",
             (thread_id, text.strip(), utc_now()),
         )
         self.ws.store.execute("UPDATE chat_threads SET status='running' WHERE id=?", (thread_id,))
         self.ws.store.event("chat_message", {"thread_id": thread_id, "role": "user"})
-        if background:
-            threading.Thread(target=self._guarded_turn, args=(thread_id,), name=f"chat-{thread_id}", daemon=True).start()
+        if worker is not None:
+            worker.start()
         else:
             self.run_turn(thread_id)
         return self.thread_detail(thread_id)
 
-    def cancel(self, thread_id: str) -> dict[str, str]:
+    def cancel(self, thread_id: str, *, reason: str = "operator cancelled the agent turn") -> dict[str, str]:
         flag = self._flags.setdefault(thread_id, threading.Event())
         flag.set()
         proc = self._procs.get(thread_id)
@@ -235,12 +248,61 @@ class ChatWorkspace:
                 os.killpg(proc.pid, 15)
             except (ProcessLookupError, PermissionError):
                 pass
-        self._activity(thread_id, "status", "cancel requested", "operator cancelled the agent turn")
+        self._activity(thread_id, "status", "cancel requested", reason)
         return {"id": thread_id, "cancel": "requested"}
+
+    def shutdown(self, timeout_s: float = 10.0) -> list[str]:
+        with self._lock:
+            active = dict(self._threads)
+        running = self.ws.store.query("SELECT id FROM chat_threads WHERE status='running'")
+        for row in running:
+            thread_id = row["id"]
+            try:
+                if thread_id in active:
+                    self.cancel(thread_id, reason="workspace server is shutting down")
+                else:
+                    # A persisted running row without an in-process worker cannot make
+                    # progress after shutdown. Preserve the transcript and mark it failed.
+                    self.ws.store.execute(
+                        "UPDATE chat_threads SET status='failed' WHERE id=?", (thread_id,)
+                    )
+                    self._assistant(
+                        thread_id,
+                        "This agent turn was stopped during workspace shutdown. "
+                        "The saved transcript is intact; send a new message to continue.",
+                    )
+                    self.publish(thread_id, {"type": "status", "status": "failed"})
+                    self.ws.store.event("chat_thread_shutdown_recovered", {"thread_id": thread_id})
+            except Exception as exc:
+                self.ws.store.event("chat_shutdown_cancel_error", {
+                    "thread_id": thread_id, "error": type(exc).__name__
+                })
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        for _thread_id, thread in active.items():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+        return [thread_id for thread_id, thread in active.items() if thread.is_alive()]
+
+    def recover_orphans(self) -> list[str]:
+        rows = self.ws.store.query("SELECT id FROM chat_threads WHERE status='running'")
+        recovered = []
+        for row in rows:
+            thread_id = row["id"]
+            self.ws.store.execute("UPDATE chat_threads SET status='failed' WHERE id=?", (thread_id,))
+            self._assistant(
+                thread_id,
+                "This agent turn was interrupted because the workspace restarted. "
+                "The saved transcript is intact; send a new message to continue.",
+            )
+            self.publish(thread_id, {"type": "status", "status": "failed"})
+            self.ws.store.event("chat_thread_interrupted", {"thread_id": thread_id, "reason": "server restarted"})
+            recovered.append(thread_id)
+        return recovered
 
     def run_turn(self, thread_id: str) -> None:
         flag = self._flags.setdefault(thread_id, threading.Event())
-        flag.clear()
         thread = self.ws.store.query_one("SELECT * FROM chat_threads WHERE id=?", (thread_id,))
         agent = self.ws.store.query_one("SELECT * FROM chat_agents WHERE id=?", (thread["agent_id"],))
         self.publish(thread_id, {"type": "status", "status": "running"})
@@ -266,6 +328,9 @@ class ChatWorkspace:
             self.run_turn(thread_id)
         except Exception as exc:
             self.ws.store.event("chat_thread_error", {"thread_id": thread_id, "error": str(exc)})
+        finally:
+            with self._lock:
+                self._threads.pop(thread_id, None)
 
     def _model_turn(self, thread: dict[str, Any], agent: dict[str, Any], flag: threading.Event, *, backend: str) -> None:
         if backend == "ollama":

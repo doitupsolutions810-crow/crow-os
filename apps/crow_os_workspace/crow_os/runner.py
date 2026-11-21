@@ -60,12 +60,12 @@ class Runner:
             recovered.append(round_id)
         return recovered
 
-    def cancel(self, round_id: str) -> None:
+    def cancel(self, round_id: str, *, reason: str = "operator cancelled the round; no harness timeout fired") -> None:
         flag = self.flag(round_id)
         flag.set()
         proc = self._procs.get(round_id)
-        self._anomaly(round_id, "operator cancelled the round; no harness timeout fired", "")
-        self.store.event("round_cancel_requested", {"round_id": round_id})
+        self._anomaly(round_id, reason, "")
+        self.store.event("round_cancel_requested", {"round_id": round_id, "reason": reason})
         if proc is None or proc.poll() is not None:
             return
 

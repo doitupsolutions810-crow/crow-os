@@ -6,6 +6,7 @@ import json
 import platform
 import sys
 import threading
+import time
 import uuid
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -85,7 +86,42 @@ class Workspace:
         return ingest_repo(self.store, self.repo, token=token)
 
     def recover(self) -> list[str]:
-        return self.runner.recover_orphans()
+        recovered = self.runner.recover_orphans()
+        chat_recovered = self.chat.recover_orphans()
+        if chat_recovered:
+            self.store.event(
+                "workspace_recovered",
+                {"rounds_interrupted": len(recovered), "chat_threads_interrupted": len(chat_recovered)},
+            )
+        return recovered
+
+    def shutdown(self, timeout_s: float = 20.0) -> dict[str, Any]:
+        """Ask active agents and test subprocesses to stop before the server exits."""
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        active_rounds = self.store.query("SELECT id FROM rounds WHERE status='running'")
+        for row in active_rounds:
+            try:
+                self.runner.cancel(row["id"], reason="workspace server is shutting down")
+            except Exception as exc:
+                self.store.event("round_shutdown_cancel_error", {
+                    "round_id": row["id"], "error": type(exc).__name__
+                })
+        chat_timeout = max(0.0, deadline - time.monotonic())
+        chat_still_running = self.chat.shutdown(chat_timeout)
+        round_threads = list(self._threads.items())
+        for _round_id, thread in round_threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(remaining)
+        round_still_running = [round_id for round_id, thread in round_threads if thread.is_alive()]
+        result = {
+            "rounds_cancel_requested": len(active_rounds),
+            "chat_threads_still_running": chat_still_running,
+            "round_threads_still_running": round_still_running,
+        }
+        self.store.event("workspace_shutdown", result)
+        return result
 
     def _start_thread(self, round_id: str) -> None:
         def _run() -> None:

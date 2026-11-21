@@ -1,0 +1,11 @@
+# Never bake deployment credentials or mutable state into the image.
+.env
+.env.*
+!.env.example
+var/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store

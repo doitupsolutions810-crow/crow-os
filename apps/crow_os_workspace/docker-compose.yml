@@ -1,18 +1,49 @@
-# Optional container for Crow-OS. The host port is bound to localhost.
-# The process inside the container listens on 0.0.0.0 so the published port works.
-# Ollama on the host is reached at host.docker.internal:11434.
+# Crow OS workspace. The published host port stays loopback-only.
+# Access remotely only through an authenticated HTTPS reverse proxy/tunnel.
 services:
   crow-os:
     build: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    user: "${CROW_UID:-1000}:${CROW_GID:-1000}"
     ports:
-      - "127.0.0.1:8765:8765"
+      - "${CROW_PUBLISH_ADDR:-127.0.0.1}:${CROW_PUBLISH_PORT:-8765}:8765"
     environment:
       CROW_HOST: 0.0.0.0
       CROW_PORT: "8765"
       CROW_OPEN_BROWSER: "0"
+      CROW_HOME: /opt/crow-os
       CROW_REPO: /repo
+      CROW_WORKTREES: /opt/crow-os/var/worktrees
+      CROW_AUTH_REQUIRED: "true"
+      CROW_AUTH_USERNAME: ${CROW_AUTH_USERNAME:-crow}
+      CROW_AUTH_PASSWORD: ${CROW_AUTH_PASSWORD:?Set CROW_AUTH_PASSWORD in apps/crow_os_workspace/.env}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-}
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      XAI_MODEL: ${XAI_MODEL:-grok-4.7}
+      HOME: /tmp
+      USER: crow
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ..:/repo
+      # Two levels up from apps/crow_os_workspace is the actual Git repository root.
+      - ../..:/repo
+      # SQLite, event logs and detached chat worktrees survive container replacement.
+      - ./var:/opt/crow-os/var
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
