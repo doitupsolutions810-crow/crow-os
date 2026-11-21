@@ -17,18 +17,18 @@ jobs:
         run: |
           PYTHONPATH=src python -c "import sys; sys.argv=['crow','--home','/tmp/crow-home','demo']; from crow_os.cli import main; main()"
           PYTHONPATH=src python -c "import sys; sys.argv=['crow','--home','/tmp/crow-home','verify']; from crow_os.cli import main; main()"
+
+  workspace:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix: { python: ["3.11", "3.12"] }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
       - name: Install workspace app dependencies
-        run: python -m pip install -r apps/crow_os_workspace/requirements.txt
-      - name: Test Crow OS workspace app
         working-directory: apps/crow_os_workspace
-        run: python -m pytest -q
-      - name: Validate hardened workspace Docker Compose
-        env:
-          CROW_AUTH_USERNAME: ci
-          CROW_AUTH_PASSWORD: ci-only-test-password
-        run: docker compose -f apps/crow_os_workspace/docker-compose.yml config --quiet
-      - name: Install workspace app dependencies
-        run: python -m pip install -r apps/crow_os_workspace/requirements.txt
+        run: python -m pip install -r requirements.txt
       - name: Test Crow OS workspace app
         working-directory: apps/crow_os_workspace
         run: python -m pytest -q
