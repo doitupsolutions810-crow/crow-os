@@ -33,15 +33,74 @@ from .worker import LLMWorker
 SECRET_FILE = "broker.secret"
 
 
+class KernelError(Exception):
+    """Kernel startup/configuration failure: the kernel fails closed."""
+
+
+def _decode_provisioned_key(raw: str) -> bytes:
+    """Decode externally provisioned signing-key material (GAP-015).
+
+    Accepts hex or URL-safe base64 (padding optional). Refuses
+    anything that does not decode to at least 32 bytes of key
+    material: short or empty keys are configuration errors.
+    """
+    key = raw.strip()
+    if not key:
+        raise KernelError("CROW_OS_SIGNING_KEY is empty")
+    try:
+        if (len(key) % 2 == 0
+                and all(c in "0123456789abcdefABCDEF" for c in key)):
+            data = bytes.fromhex(key)
+        else:
+            import base64
+            data = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
+    except Exception as e:  # noqa: BLE001 - any decode failure is a refusal
+        raise KernelError(
+            f"CROW_OS_SIGNING_KEY could not be decoded: {e}") from None
+    if len(data) < 32:
+        raise KernelError(
+            "CROW_OS_SIGNING_KEY must decode to at least 32 bytes")
+    return data
+
+
 class Kernel:
-    def __init__(self, home: Path, *, allow_private_tools: bool = False):
+    def __init__(self, home: Path, *, allow_private_tools: bool = False,
+                 production: bool | None = None):
         self.home = Path(home)
         self.home.mkdir(parents=True, exist_ok=True)
+        mode = (production if production is not None else
+                os.environ.get("CROW_OS_MODE", "").strip().lower()
+                == "production")
+        self._production = mode
         secret_path = self.home / SECRET_FILE
-        if not secret_path.exists():
-            secret_path.write_bytes(hashlib.sha256(
-                f"crow-os:{self.home.resolve()}".encode()).digest())
-        secret = secret_path.read_bytes()
+        if mode:
+            # GAP-015: production never starts on deterministic,
+            # path-derived "secret" material. Signing identity must
+            # be externally provisioned via CROW_OS_SIGNING_KEY (hex
+            # or base64, >= 32 bytes). The Ed25519 federation identity
+            # stays separate: the broker ledger chain is HMAC, and its
+            # custody is the operator's env, not a path convention.
+            if not os.environ.get("CROW_OS_SIGNING_KEY", "").strip():
+                raise KernelError(
+                    "production kernel (CROW_OS_MODE=production) refuses "
+                    "to start without CROW_OS_SIGNING_KEY: the default "
+                    "path-derived dev secret is not custodial key material "
+                    "(GAP-015)")
+            secret = _decode_provisioned_key(os.environ["CROW_OS_SIGNING_KEY"])
+            secret_path.write_bytes(secret)  # the provisioned key lives with the home
+            self.signing_backend = "hmac-sha256 (externally provisioned key)"
+        else:
+            if not secret_path.exists():
+                # Dev-only convenience: a stable secret for local homes so
+                # restarts keep one chain. It is derived from the resolved
+                # home path, i.e. reproducible by anyone who knows the path
+                # convention, which is exactly why production refuses it
+                # (GAP-015).
+                secret_path.write_bytes(hashlib.sha256(
+                    f"crow-os:{self.home.resolve()}".encode()).digest())
+            secret = secret_path.read_bytes()
+            self.signing_backend = ("hmac-sha256 (dev, path-derived; "
+                                    "not for production)")
         self.ledger = Ledger(self.home / "ledger.jsonl", signer=HmacSigner(secret))
         if not self.ledger.path.exists():
             # A kernel home always has its ledger: an absent file then
