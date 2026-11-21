@@ -6,13 +6,15 @@ The board reads **this Avrone checkout**. It does not ship sample rounds.
 
 ## Start
 
+From the repository root:
+
 ```bash
-python crow-os-workspace/run.py
+python apps/crow_os_workspace/run.py
 ```
 
-Then open http://127.0.0.1:8765.
+Then open http://127.0.0.1:8765. Direct local development is unauthenticated by default; keep it on loopback.
 
-From `crow-os-workspace/` the same command is `python run.py`.
+From `apps/crow_os_workspace/` the same command is `python run.py`.
 
 Optional environment:
 
@@ -24,10 +26,14 @@ Optional environment:
 | `CURSOR_API_KEY` | Optional Cursor cloud-agent backend (`POST /v1/agents`). Without it, that backend says the key is missing and does not call the API. |
 | `XAI_API_KEY` | Optional Grok backend (`POST https://api.x.ai/v1/chat/completions`). Without it, Grok says the key is missing. |
 | `XAI_MODEL` | Grok model id. Default `grok-4.7`. |
-| `CROW_REPO` | Checkout to ingest. Defaults to the parent of this directory when it contains `.git`. |
+| `CROW_REPO` | Checkout to ingest. Defaults to the nearest parent Git checkout. In Docker this is `/repo`. |
 | `CROW_PORT` | Listen port. Default `8765`. |
 | `CROW_HOST` | Listen address. Default `127.0.0.1`. |
 | `CROW_OPEN_BROWSER` | Set to `0` to skip opening a browser. Default opens `http://127.0.0.1:8765`. |
+| `CROW_AUTH_REQUIRED` | Enable HTTP Basic authentication. Docker enables it; direct loopback development defaults off. |
+| `CROW_AUTH_USERNAME` / `CROW_AUTH_PASSWORD` | Workspace login. The password is mandatory for the Docker profile and must be stored only in `.env`/deployment secrets. |
+| `CROW_HOME` | Persistent app state root. Docker uses `/opt/crow-os`. |
+| `CROW_WORKTREES` | Detached chat/test worktree root. Docker keeps it under the persistent `var/` mount. |
 
 On startup the server reads host toolchain versions, repo-local git config, `.env` / `pyproject.toml` when present, and Ollama's `/api/tags`. Token-like values are masked before they are stored or shown. Runs inherit the host process environment; the System tab shows the masked view.
 
@@ -39,21 +45,53 @@ A local Ollama agent gets a tool loop confined to a detached git worktree on a `
 
 Cursor and xAI agents use the same chat. They are skipped, with the reason on screen, when their keys are absent.
 
-## Docker
+## Docker deployment
 
-From the repository root:
+The Docker profile is the recommended self-hosted deployment. It fixes the repository mount at `/repo`, persists the SQLite database, event log and detached worktrees in `var/`, passes optional connector credentials into the container, restarts unless stopped, and exposes an authenticated health-checked service.
 
-```bash
-docker compose -f crow-os-workspace/docker-compose.yml up --build
-```
-
-The published port is `127.0.0.1:8765`. Inside the container the server binds `0.0.0.0` so that mapping works. The repo is mounted at `/repo`. Host Ollama is expected at `host.docker.internal:11434`.
-
-Install the Python packages if they are not already present:
+From this directory (`apps/crow_os_workspace/`):
 
 ```bash
-python -m pip install -r crow-os-workspace/requirements.txt
+cp .env.example .env
+mkdir -p var
 ```
+
+Edit `.env` before starting:
+
+- Set `CROW_AUTH_PASSWORD` to a strong unique password. Generate one with `openssl rand -hex 32`. The Docker profile refuses to start without it.
+- Set `CROW_AUTH_USERNAME` to the username shown in the browser's Basic Auth prompt.
+- Set `CROW_UID` and `CROW_GID` to the owner of the checked-out repository (`id -u` and `id -g`). This lets the container update Git refs without changing host file ownership.
+- Add a read-only `GITHUB_TOKEN` or `GH_TOKEN` to load pull requests and Actions checks. Add `CURSOR_API_KEY` and/or `XAI_API_KEY` only when those backends are enabled.
+- Keep `CROW_PUBLISH_ADDR=127.0.0.1`. Docker binds only to loopback; remote access must go through an authenticated HTTPS reverse proxy or private tunnel.
+
+Then validate and launch:
+
+```bash
+docker compose config
+docker compose up -d --build
+docker compose ps
+docker compose logs -f crow-os
+```
+
+Open `http://127.0.0.1:8765`. The browser asks for the Basic Auth username/password. The health endpoint `GET /api/health` is intentionally minimal and unauthenticated for Docker healthchecks; every other route, including static assets, API calls and SSE streams, requires authentication. API responses send basic hardening headers and are not cached.
+
+The container runs with a read-only root filesystem, a temporary `/tmp`, dropped Linux capabilities and `no-new-privileges`. Only the repository bind mount and the app's `var/` directory are writable. The repository is mounted from `../..` (the actual Git root), not the `apps/` directory. Do not mount the Docker socket into this workspace service.
+
+### Remote access
+
+Do not publish port 8765 directly to the Internet or set `CROW_PUBLISH_ADDR=0.0.0.0`. Put a reverse proxy or private access tunnel in front of the loopback port, terminate TLS there, and preserve the HTTP `Authorization` header. If the proxy strips that header, browser login and API requests will fail closed.
+
+### Persistence and backups
+
+SQLite, the append-only event log and detached worktrees live in `apps/crow_os_workspace/var/`. The directory is gitignored and survives container replacement. Stop the service before taking a consistent file-level backup:
+
+```bash
+docker compose down
+tar -czf crow-os-workspace-var-$(date +%Y%m%d-%H%M%S).tar.gz var
+docker compose up -d
+```
+
+Host Ollama is reached at `host.docker.internal:11434` by default. The workspace does not install or start Ollama for you. Pull at least one model on the host and confirm `GET /api/ollama` reports it reachable before expecting local chat agents or advisory rounds to work.
 
 ## What is real
 
@@ -97,4 +135,4 @@ python -m pytest
 
 Covers ingestion hashes, the verification gate, resume, comparison, cancel, and the fix loop.
 
-SQLite and logs live in `crow-os-workspace/var/` (gitignored). The append-only event log is the `events` table.
+SQLite and logs live in `apps/crow_os_workspace/var/` (gitignored). The append-only event log is the `events` table. The Docker profile persists this directory across container replacements.
