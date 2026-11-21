@@ -62,7 +62,18 @@ def create_app(
             await asyncio.to_thread(app.state.workspace.ingest)
         await asyncio.to_thread(app.state.workspace.recover)
         await asyncio.to_thread(app.state.workspace.system_config, refresh=True)
-        yield
+        try:
+            yield
+        finally:
+            try:
+                await asyncio.to_thread(app.state.workspace.shutdown, 20.0)
+            except Exception as exc:
+                try:
+                    app.state.workspace.store.event("workspace_shutdown_error", {
+                        "error": type(exc).__name__
+                    })
+                except Exception:
+                    pass
 
     app = FastAPI(title="Crow-OS AVRONE Workspace", lifespan=lifespan)
     app.state.workspace = workspace
