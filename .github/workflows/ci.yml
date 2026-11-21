@@ -63,7 +63,7 @@ jobs:
           test "$unauthenticated" = "401"
           curl --silent --show-error --fail --user "ci:ci-only-test-password" http://127.0.0.1:8765/ >/tmp/crow-index.html
           curl --silent --show-error --fail --user "ci:ci-only-test-password" http://127.0.0.1:8765/api/overview >/tmp/crow-overview.json
-          grep -q '"repo": "/repo"' /tmp/crow-overview.json
+          python -c "import json; assert json.load(open('/tmp/crow-overview.json'))['repo'] == '/repo'"
           test -s var/crow.sqlite
           docker compose down
           test -s var/crow.sqlite
