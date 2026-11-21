@@ -139,8 +139,7 @@ class Broker:
         state["sig"] = self._signer.sign(state)
         tmp = self._state_path.with_name(
             f"{self._state_path.name}.{uuid.uuid4().hex[:8]}.tmp")
-        tmp.write_text(json.dumps(state, sort_keys=True) + "
-")
+        tmp.write_text(json.dumps(state, sort_keys=True) + "\n")
         tmp.replace(self._state_path)  # atomic: no torn state files
 
     def _persist(self) -> None:
