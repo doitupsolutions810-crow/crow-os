@@ -39,7 +39,7 @@ CATALOG: list[dict[str, str]] = [
      "description": "Search, read and send mail from your mailbox.",
      "kind": "asserted"},
     {"id": "google-calendar", "name": "Google Calendar", "category": "Productivity",
-     "description": "Your calendars, events and free/busy times.",
+     "description": "Your calendars, events and free-busy times.",
      "kind": "asserted"},
     {"id": "google-drive", "name": "Google Drive", "category": "Productivity",
      "description": "Find, upload and share files in Drive.",
@@ -57,6 +57,13 @@ class PluginError(Exception):
     pass
 
 
+def _truthy(value: Any) -> bool:
+    """String-aware truthiness: 'false','0','no','off' are off."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "0", "no", "off", "none")
+    return bool(value)
+
+
 class PluginRegistry:
     def __init__(self, fs: CrowFS):
         self.fs = fs
@@ -72,7 +79,7 @@ class PluginRegistry:
                    for p in CATALOG):
             raise PluginError(f"plugin {plugin_id!r} is not user-toggleable")
         state = self._asserted()
-        state[plugin_id] = bool(connected)
+        state[plugin_id] = _truthy(connected)
         self.fs.write_file(PLUGINS_FILE, json.dumps(state, indent=2))
 
     def list(self, ollama_reachable: bool = False,
@@ -90,10 +97,10 @@ class PluginRegistry:
             elif cstate == "unreachable":
                 entry["connected"], entry["state"] = False, "configured · unreachable"
             elif p["kind"] == "verified":
-                entry["connected"] = bool(ollama_reachable)
+                entry["connected"] = _truthy(ollama_reachable)
                 entry["state"] = "verified" if ollama_reachable else "not reachable"
             else:
-                entry["connected"] = bool(asserted.get(p["id"]))
+                entry["connected"] = _truthy(asserted.get(p["id"]))
                 entry["state"] = "connected (your word)" if entry["connected"] else "not connected"
             out.append(entry)
         return out

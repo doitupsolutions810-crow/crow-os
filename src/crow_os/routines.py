@@ -31,6 +31,44 @@ def _slug(name: str) -> str:
     return slug or "routine"
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Coerce to int without crashing on bools, numeric strings, or garbage."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+            return default
+        return int(value)
+    if isinstance(value, str):
+        try:
+            f = float(value)
+            if f != f or f in (float("inf"), float("-inf")):
+                return default
+            return int(f)
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    """Coerce to float without crashing; NaN and Inf become default."""
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and (value != value or value in (float("inf"), float("-inf"))):
+            return default
+        return float(value)
+    if isinstance(value, str):
+        try:
+            f = float(value)
+            if f != f or f in (float("inf"), float("-inf")):
+                return default
+            return f
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
 class RoutineStore:
     def __init__(self, fs: CrowFS):
         self.fs = fs
@@ -95,7 +133,7 @@ class RoutineStore:
     def mark_run(self, routine_id: str, when: float) -> dict[str, Any]:
         routine = self.get(routine_id)
         routine["last_run"] = when
-        routine["runs"] = int(routine.get("runs") or 0) + 1
+        routine["runs"] = _safe_int(routine.get("runs"), 0) + 1
         self._save(routine)
         return routine
 
@@ -109,4 +147,4 @@ class RoutineStore:
         now = time.time() if now is None else now
         return [r for r in self.list()
                 if r.get("enabled")
-                and now - float(r.get("last_run") or 0) >= int(r["interval_seconds"])]
+                and now - _safe_float(r.get("last_run"), 0.0) >= _safe_int(r["interval_seconds"], MIN_INTERVAL)]
