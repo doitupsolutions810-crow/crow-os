@@ -130,6 +130,19 @@ def create_app(
 
     @app.get("/api/health")
     def health():
+        # Docker readiness requires both the intended checkout and the persistent
+        # SQLite store to be usable. Optional Ollama/GitHub/Cursor/xAI services are
+        # reported separately and do not make the workspace itself unhealthy.
+        try:
+            from .gitrepo import head_sha
+            if not head_sha(workspace.repo):
+                raise RuntimeError("repository has no HEAD")
+            workspace.store.query_one("SELECT 1 AS ok")
+        except Exception:
+            return JSONResponse(
+                status_code=503,
+                content={"ok": False, "detail": "repository or persistent workspace state is unavailable"},
+            )
         return {"ok": True}
 
     @app.get("/api/overview")
