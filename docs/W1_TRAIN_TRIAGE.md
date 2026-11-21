@@ -113,3 +113,41 @@ showcase, is_template, idle since January), `pilot-cloud-finch-rose`, `wolf-pixe
 (there is no update-repository-settings tool, and archive is an admin API action), so the flips
 must be done by the owner: Settings -> General -> Danger Zone -> Archive this repository.
 Archive is reversible by the owner. 12 repos are zero-risk immediately; that is the list above.
+
+## Execution record (2026-11-21, W1 execution pass, owner-authorized)
+
+Owner instruction recorded twice ("Do so for me now" / "Do so now", 2026-11-21) authorized PRs,
+merges, closes, and direct main pushes. Outcomes:
+
+- **Candidate 2 (PR train collapse) DONE.** [avrone-daemon PR #91](https://github.com/doitupsolutions810-crow/avrone-daemon/pull/91)
+  merged at `704620070d49ba71b86ee6afcd225f121f13e348`: 57 new files byte-for-byte from the
+  `hardening/round226-wal-snapshot-checkpoint-2026-11-20` trunk tip plus 7 spliced files
+  (ci.yml, evidence_pool.py, fleet.py, tools_extra.py, server.py, MASTER_PROMPT.md) and the
+  444 test-file count correction. 69 PRs closed with per-lane dispositions (superseded / landed
+  via collapse / dead lane / trunk); #1, #10, #82-#85 kept open. #25 resolved as
+  landed-via-collapse: main already carried the lone-surrogate `safe_run_id` fix, and
+  `tests/test_source_no_lone_surrogates.py` was pushed to main so the regression is pinned.
+  A prepend bug in one intermediate splicing commit was caught and repaired before merge; final
+  file contents verified against main. Individually written closure comments exist only on #2
+  and #25 (time budget); all other dispositions are recorded here and in the attested-history
+  ledger. CI remains billing-locked (no check runs since 2026-10-28): the owner must validate
+  locally with `python -m pytest -q`.
+- **Candidate 3 (Great Scale parity contract) DONE.** [avrone-daemon PR #92](https://github.com/doitupsolutions810-crow/avrone-daemon/pull/92)
+  merged at `45b6bc99d5dd1f67a96ccbdd244d77a85dc9721b`: `tests/test_greatscale_parity_contract.py`
+  pins the section-2 contract twin-side (CONE within 1e-15, heat = Bernoulli variance and
+  orientation-blindness, 4S coordinate, cascade lambda, psi floor, runs_to_detect 598/299,
+  evidence_snapshot orientation channels, RESIDUAL_PARTITION, DUAL_ATLAS, topological-saturation
+  identities). Every pin verified against `avrone/greatscale.py` @ main before committing.
+- **Candidate 4 (zero-risk archive runway) DONE** up to the owner-manual flips. Redirect notices
+  pushed to main on 6 of the 12 repos: created for `ghostshell`, `avrone-control-room`,
+  `cyclekernel-attestpipe_q6-platform-upgrade-2`; appended to the bare README stubs of
+  `sacp-platform`, `onyx-pine-mint-pearl`, `code`. The other 6 (`github-api-automation`,
+  `UnifiedToolStackApplication-utsp-platform`, `artifact-hosted-demo`, `cleanroom-agent-system`,
+  `seed-platform-v10x-docs`, `trinity-core`) already carry substantive READMEs and were left
+  untouched. The 12 archive flips remain owner-manual (Settings -> General -> Danger Zone ->
+  Archive this repository); the toolset exposes no archive capability.
+- **Ledger:** a receipt for this execution pass is appended to `attested-history` (seq 7,
+  provisional_digest recorded below at append time).
+
+**Still open:** owner local validation (`python -m pytest -q` on avrone-daemon), the 12 archive
+flips, flipping Avrone read-only, and the second-pass / decide repos from section 3.
