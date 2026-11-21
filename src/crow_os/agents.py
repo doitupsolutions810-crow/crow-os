@@ -52,8 +52,12 @@ class AgentError(Exception):
     pass
 
 
-def _has_control_chars(value: str) -> bool:
-    return any(unicodedata.category(ch) in {"Cc", "Cf", "Cs"} for ch in value)
+def _has_control_chars(value: str, *, allow_line_breaks: bool = False) -> bool:
+    return any(
+        unicodedata.category(ch) in {"Cc", "Cf", "Cs"}
+        and not (allow_line_breaks and ch in "\\n\\r\\t")
+        for ch in value
+    )
 
 
 def _valid_agent_id(agent_id: object) -> bool:
@@ -117,7 +121,9 @@ class AgentRegistry:
         if not isinstance(instructions, str) or not instructions.strip():
             raise AgentError("custom instructions are required")
         instructions = instructions.strip()
-        if _has_control_chars(instructions):
+        # Newlines and tabs are formatting in a system prompt, not hostile
+        # control data. Other control/format/surrogate code points remain refused.
+        if _has_control_chars(instructions, allow_line_breaks=True):
             raise AgentError("custom instructions contain control characters")
         if len(instructions) > MAX_INSTRUCTIONS:
             raise AgentError(f"instructions too long (max {MAX_INSTRUCTIONS} chars)")
