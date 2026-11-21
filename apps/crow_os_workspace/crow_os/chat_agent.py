@@ -253,21 +253,37 @@ class ChatWorkspace:
 
     def shutdown(self, timeout_s: float = 10.0) -> list[str]:
         with self._lock:
-            active = list(self._threads.items())
-        for thread_id, _thread in active:
+            active = dict(self._threads)
+        running = self.ws.store.query("SELECT id FROM chat_threads WHERE status='running'")
+        for row in running:
+            thread_id = row["id"]
             try:
-                self.cancel(thread_id, reason="workspace server is shutting down")
+                if thread_id in active:
+                    self.cancel(thread_id, reason="workspace server is shutting down")
+                else:
+                    # A persisted running row without an in-process worker cannot make
+                    # progress after shutdown. Preserve the transcript and mark it failed.
+                    self.ws.store.execute(
+                        "UPDATE chat_threads SET status='failed' WHERE id=?", (thread_id,)
+                    )
+                    self._assistant(
+                        thread_id,
+                        "This agent turn was stopped during workspace shutdown. "
+                        "The saved transcript is intact; send a new message to continue.",
+                    )
+                    self.publish(thread_id, {"type": "status", "status": "failed"})
+                    self.ws.store.event("chat_thread_shutdown_recovered", {"thread_id": thread_id})
             except Exception as exc:
                 self.ws.store.event("chat_shutdown_cancel_error", {
                     "thread_id": thread_id, "error": type(exc).__name__
                 })
         deadline = time.monotonic() + max(0.0, timeout_s)
-        for _thread_id, thread in active:
+        for _thread_id, thread in active.items():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             thread.join(remaining)
-        return [thread_id for thread_id, thread in active if thread.is_alive()]
+        return [thread_id for thread_id, thread in active.items() if thread.is_alive()]
 
     def recover_orphans(self) -> list[str]:
         rows = self.ws.store.query("SELECT id FROM chat_threads WHERE status='running'")
