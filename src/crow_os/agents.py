@@ -55,7 +55,7 @@ class AgentError(Exception):
 def _has_control_chars(value: str, *, allow_line_breaks: bool = False) -> bool:
     return any(
         unicodedata.category(ch) in {"Cc", "Cf", "Cs"}
-        and not (allow_line_breaks and ch in "\\n\\r\\t")
+        and not (allow_line_breaks and ch in "\n\r\t")
         for ch in value
     )
 
