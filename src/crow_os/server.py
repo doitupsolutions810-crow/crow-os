@@ -18,7 +18,10 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
-from .llm import DEFAULT_BASE, DEFAULT_MODEL, LLMUnavailable, OllamaClient
+from .llm import (
+    DEFAULT_BASE, DEFAULT_MODEL, MODEL_FROM_ENV, LLMUnavailable, OllamaClient,
+    pick_local_model, same_model,
+)
 from .runtime import Kernel
 
 HOME_HTML = Path(__file__).with_name("home.html")
@@ -36,11 +39,14 @@ class HomeServer:
         client = OllamaClient()
         try:
             h = client.health()
-            return {"reachable": True, "base": DEFAULT_BASE,
-                    "active": DEFAULT_MODEL, "installed": h["models"],
-                    "active_installed": h["model_present"]}
+            installed = h.get("models") or []
+            active = DEFAULT_MODEL if MODEL_FROM_ENV else (pick_local_model(installed) or DEFAULT_MODEL)
+            active_installed = any(same_model(active, name) for name in installed)
+            return {"reachable": True, "base": client.base_url,
+                    "active": active, "installed": installed,
+                    "active_installed": active_installed}
         except LLMUnavailable as e:
-            return {"reachable": False, "base": DEFAULT_BASE,
+            return {"reachable": False, "base": client.base_url,
                     "active": DEFAULT_MODEL, "installed": [],
                     "active_installed": False, "error": str(e)}
 
@@ -79,7 +85,8 @@ class HomeServer:
             return {"started": True, "mode": "agent", "agent": agent["id"],
                     "job": self.kernel.workflow.get(job_id)}
         if mode == "auto":
-            mode = "llm" if self.model_info()["reachable"] else "demo"
+            info = self.model_info()
+            mode = "llm" if info["reachable"] and info["active_installed"] else "demo"
         job_id = self.kernel.workflow.create_job(objective)
         if mode == "llm":
             target = lambda: self.kernel.run_llm(objective, model=model, job_id=job_id, tools_enabled=tools_enabled)  # noqa: E731
