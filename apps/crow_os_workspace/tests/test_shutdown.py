@@ -64,5 +64,5 @@ def test_workspace_shutdown_cancels_active_round_and_chat(workspace):
     result = workspace.shutdown(timeout_s=0.5)
 
     assert result["rounds_cancel_requested"] == 1
-    assert not workspace.runner.flag("round-live").is_set() is False
+    assert workspace.runner.flag("round-live").is_set()
     assert result["chat_threads_still_running"] == []
