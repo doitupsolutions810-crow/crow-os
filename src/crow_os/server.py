@@ -124,6 +124,12 @@ class HomeServer:
 
 def make_handler(home: HomeServer):
     class Handler(BaseHTTPRequestHandler):
+        MAX_REQUEST_BYTES = 1_048_576
+
+        def end_headers(self):
+            self._response_started = True
+            super().end_headers()
+
         def _json(self, code: int, obj: Any) -> None:
             body = json.dumps(obj).encode()
             self.send_response(code)
@@ -132,7 +138,56 @@ def make_handler(home: HomeServer):
             self.end_headers()
             self.wfile.write(body)
 
+        def _body_object(self) -> dict[str, Any] | None:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length < 0:
+                    self._json(400, {"error": "invalid Content-Length"})
+                    return None
+                if length > self.MAX_REQUEST_BYTES:
+                    self._json(413, {"error": "request body too large"})
+                    return None
+                payload = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+                self._json(400, {"error": "body must be JSON"})
+                return None
+            if not isinstance(payload, dict):
+                self._json(400, {"error": "body must be a JSON object"})
+                return None
+            return payload
+
+        def _server_error(self, error: Exception) -> None:
+            self.log_error("request failed (%s)", type(error).__name__)
+            if getattr(self, "_response_started", False):
+                self.close_connection = True
+                return
+            try:
+                self._json(500, {"error": "internal server error"})
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                self.close_connection = True
+
         def do_GET(self):  # noqa: N802
+            self._response_started = False
+            try:
+                self._do_GET()
+            except Exception as error:  # noqa: BLE001 - never drop a request thread
+                self._server_error(error)
+
+        def _do_POST(self):  # noqa: N802
+            self._response_started = False
+            try:
+                self._do_POST()
+            except Exception as error:  # noqa: BLE001 - never drop a request thread
+                self._server_error(error)
+
+        def _do_DELETE(self):  # noqa: N802
+            self._response_started = False
+            try:
+                self._do_DELETE()
+            except Exception as error:  # noqa: BLE001 - never drop a request thread
+                self._server_error(error)
+
+        def _do_GET(self):  # noqa: N802
             u = urlparse(self.path)
             if u.path == "/":
                 body = HOME_HTML.read_bytes()
@@ -268,8 +323,9 @@ def make_handler(home: HomeServer):
             if u.path == "/api/agents":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     agent = home.kernel.agents.create(
                         payload.get("name"), payload.get("instructions"),
                         model=payload.get("model"),
@@ -285,8 +341,9 @@ def make_handler(home: HomeServer):
                 from .routines import RoutineError
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     if u.path == "/api/routines":
                         routine = home.kernel.create_routine(
                             payload.get("name"), payload.get("agent"),
@@ -306,8 +363,9 @@ def make_handler(home: HomeServer):
             if u.path == "/api/fleet":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     objective = payload.get("objective")
                     agents = payload.get("agents")
                     if not isinstance(objective, str) or not objective.strip():
@@ -332,8 +390,9 @@ def make_handler(home: HomeServer):
             if u.path.startswith("/api/connectors/"):
                 from .connectors import ConnectorError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     status = home.kernel.connectors.configure(
                         u.path.rsplit("/", 1)[-1], payload.get("base_url"))
                 except (ValueError, json.JSONDecodeError):
@@ -344,8 +403,9 @@ def make_handler(home: HomeServer):
             if u.path == "/api/peers":
                 from .federation import FederationError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     peer = home.kernel.peers.register(
                         payload.get("name"), payload.get("url"),
                         payload.get("pubkey"))
@@ -357,8 +417,9 @@ def make_handler(home: HomeServer):
             if u.path == "/api/federation/dispatch":
                 from .federation import FederationError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     reply = home.kernel.federation_dispatch(
                         payload.get("peer"), payload.get("agent"),
                         payload.get("objective"))
@@ -371,8 +432,9 @@ def make_handler(home: HomeServer):
                 from .federation import FederationError, verify_incoming
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     peer = verify_incoming(home.kernel.peers, payload)
                     # Round 27: agent existence is validated BEFORE the
                     # replay check. federation_receive used to be the
@@ -423,8 +485,9 @@ def make_handler(home: HomeServer):
             if u.path == "/api/plugins":
                 from .plugins import PluginError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     home.kernel.plugins.set_asserted(
                         payload.get("id"), bool(payload.get("connected")))
                 except (ValueError, json.JSONDecodeError):
@@ -435,8 +498,9 @@ def make_handler(home: HomeServer):
             if u.path == "/api/devices":
                 from .devices import DeviceError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     device = home.kernel.devices.register(
                         payload.get("name"), payload.get("kind", "device"),
                         payload.get("address", ""))
@@ -448,8 +512,9 @@ def make_handler(home: HomeServer):
             if u.path == "/api/spawn":
                 from .agents import AgentError
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    payload = self._body_object()
+                    if payload is None:
+                        return
                     agent_id = payload.get("agent")
                     objective = payload.get("objective")
                     parent = payload.get("parent")
@@ -487,8 +552,9 @@ def make_handler(home: HomeServer):
             if u.path != "/api/run":
                 return self._json(404, {"error": "not found"})
             try:
-                length = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(length) or b"{}")
+                payload = self._body_object()
+                if payload is None:
+                    return
             except (ValueError, json.JSONDecodeError):
                 return self._json(400, {"error": "body must be JSON"})
             objective = payload.get("objective")
