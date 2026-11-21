@@ -81,9 +81,13 @@ def create_app(
                 try:
                     decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
                     supplied_user, separator, supplied_password = decoded.partition(":")
-                    valid = bool(separator) and hmac.compare_digest(supplied_user, auth_username)
-                    valid = valid and hmac.compare_digest(supplied_password, auth_password)
-                except (binascii.Error, UnicodeDecodeError, ValueError):
+                    valid = bool(separator) and hmac.compare_digest(
+                        supplied_user.encode("utf-8"), auth_username.encode("utf-8")
+                    )
+                    valid = valid and hmac.compare_digest(
+                        supplied_password.encode("utf-8"), auth_password.encode("utf-8")
+                    )
+                except (binascii.Error, UnicodeDecodeError, TypeError, ValueError):
                     valid = False
             if not valid:
                 return JSONResponse(
