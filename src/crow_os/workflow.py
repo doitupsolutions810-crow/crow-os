@@ -48,6 +48,8 @@ class Workflow:
                 job = jobs.get(e["raw"]["job_id"])
                 if job:
                     job["status"] = "failed"
+                    job["error"] = e["raw"].get("note") or "Step failed"
+                    job["failed_role"] = e["raw"].get("role")
         return jobs
 
     def jobs(self) -> list[dict[str, Any]]:

@@ -37,6 +37,12 @@ class WorkerError(Exception):
     pass
 
 
+def _has_plan_reference(artifact: str, job_id: str) -> bool:
+    # A reference embedded inside another value is not the requested line.
+    # Accept a normal code comment without changing any model output ourselves.
+    return re.search(r"(?m)^\s*(?:#\s*)?" + re.escape(f"plan:{job_id}") + r"\s*$", artifact) is not None
+
+
 class LLMWorker:
     def __init__(self, broker: Broker, workflow: Workflow, ledger: Ledger,
                  client: OllamaClient, tools: ToolRunner | None = None):
@@ -63,6 +69,8 @@ class LLMWorker:
                 PROMPTS["debugger"], f"Objective: {objective}\nJob: {job_id}",
                 on_token=(lambda t: outputs[job_id].__setitem__(
                     "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
+            if outputs is not None:
+                outputs[job_id]["plan"] = plan
             state = self.workflow.report(job_id, "debugger", True,
                                          f"plan chars={len(plan)}")
             if state["status"] == "failed":
@@ -91,8 +99,30 @@ class LLMWorker:
                 f"Plan reference line: plan:{job_id}",
                 on_token=(lambda t: outputs[job_id].__setitem__(
                     "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
+            if outputs is not None:
+                outputs[job_id]["artifact"] = artifact
+            if artifact.strip() and not _has_plan_reference(artifact, job_id):
+                # A small local model can omit the required reference. Give it
+                # one bounded repair attempt, still behind the same capability
+                # gate. Never manufacture a reference on the model's behalf.
+                self.broker.authorize(cap, "EXECUTE", "jobs.coder")
+                self.ledger.append("crow-os/kernel", "coder.repair", {
+                    "job_id": job_id, "attempt": 1,
+                    "reason": "missing plan reference line"})
+                if outputs is not None:
+                    outputs[job_id]["live"] = ""
+                    outputs[job_id]["repair_attempts"] = 1
+                artifact = self.client.chat_stream(
+                    PROMPTS["coder"],
+                    f"The previous artifact failed acceptance: missing plan reference line.\n"
+                    f"Return a corrected complete artifact; retain its implementation.\n"
+                    f"Objective: {objective}\nPlan:\n{plan}\n{context}"
+                    f"Previous artifact:\n{artifact}\n"
+                    f"Plan reference line: plan:{job_id}",
+                    on_token=(lambda t: outputs[job_id].__setitem__(
+                        "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
             state = self.workflow.report(job_id, "coder", bool(artifact.strip()),
-                                         f"artifact chars={len(artifact)}")
+                                         f"artifact chars={len(artifact)}" if artifact.strip() else "empty artifact")
             if outputs is not None:
                 outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
                 outputs[job_id]["plan"] = plan
@@ -102,9 +132,11 @@ class LLMWorker:
 
             # tester (deterministic: criteria actually checked)
             role = "tester"
-            checks = [f"plan:{job_id}" in artifact, len(artifact.strip()) > 0]
-            state = self.workflow.report(job_id, "tester", all(checks),
-                                         f"criteria {sum(checks)}/{len(checks)}")
+            checks = [_has_plan_reference(artifact, job_id), len(artifact.strip()) > 0]
+            note = f"criteria {sum(checks)}/{len(checks)}"
+            if not checks[0]:
+                note += f"; missing plan reference line plan:{job_id}"
+            state = self.workflow.report(job_id, "tester", all(checks), note)
             if state["status"] == "failed":
                 return state
 
