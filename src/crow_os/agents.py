@@ -25,6 +25,7 @@ import json
 import re
 import threading
 import time
+import unicodedata
 from typing import Any
 
 from .fs import CrowFS, FSError
@@ -49,6 +50,18 @@ DEFAULT_AVATAR = {"shape": "blob", "color": "orange"}
 
 class AgentError(Exception):
     pass
+
+
+def _has_control_chars(value: str) -> bool:
+    return any(unicodedata.category(ch) in {"Cc", "Cf", "Cs"} for ch in value)
+
+
+def _valid_agent_id(agent_id: object) -> bool:
+    return (
+        isinstance(agent_id, str)
+        and len(agent_id) <= 80
+        and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", agent_id) is not None
+    )
 
 
 def _slugify(name: str) -> str:
@@ -78,82 +91,166 @@ class AgentRegistry:
         if not isinstance(name, str) or not name.strip():
             raise AgentError("agent name is required")
         name = name.strip()
+        if _has_control_chars(name):
+            raise AgentError("agent name contains control characters")
         if len(name) > MAX_NAME:
             raise AgentError(f"name too long (max {MAX_NAME} chars)")
         if not isinstance(instructions, str) or not instructions.strip():
             raise AgentError("custom instructions are required")
         instructions = instructions.strip()
+        if _has_control_chars(instructions):
+            raise AgentError("custom instructions contain control characters")
         if len(instructions) > MAX_INSTRUCTIONS:
-            raise AgentError(
-                f"instructions too long (max {MAX_INSTRUCTIONS} chars)")
-        grants = []
+            raise AgentError(f"instructions too long (max {MAX_INSTRUCTIONS} chars)")
+
+        if model is not None:
+            if not isinstance(model, str):
+                raise AgentError("model must be a model name string")
+            model = model.strip()
+            if model and (
+                len(model) > 128
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", model) is None
+            ):
+                raise AgentError("model must be a valid model name")
+            model = model or None
+
+        if tools is not None and not isinstance(tools, list):
+            raise AgentError("tools must be a list of tool names")
+        if extra_tools is not None and not isinstance(extra_tools, list):
+            raise AgentError("extra_tools must be a list of tool names")
         catalog = TOOLS + list(extra_tools or [])
-        for t in tools or []:
-            if t not in catalog:
-                raise AgentError(f"unknown tool: {t}")
-            if t not in grants:
-                grants.append(t)
+        grants: list[str] = []
+        for tool in tools or []:
+            if not isinstance(tool, str) or not tool or _has_control_chars(tool):
+                raise AgentError("tool names must be non-empty strings")
+            if tool not in catalog:
+                raise AgentError(f"unknown tool: {tool}")
+            if tool not in grants:
+                grants.append(tool)
+
+        if avatar is not None and not isinstance(avatar, dict):
+            raise AgentError("avatar must be an object")
+        avatar = avatar or {}
+        look = dict(DEFAULT_AVATAR)
+        shape = avatar.get("shape")
+        color = avatar.get("color")
+        if shape is not None:
+            if not isinstance(shape, str) or shape not in AVATAR_SHAPES:
+                raise AgentError(f"unknown avatar shape {shape!r}")
+            look["shape"] = shape
+        if color is not None:
+            if not isinstance(color, str) or color not in AVATAR_COLORS:
+                raise AgentError(f"unknown avatar color {color!r}")
+            look["color"] = color
+
         base = _slugify(name)
         if base in RESERVED:
             raise AgentError(f"'{name}' collides with a built-in role")
-        agent_id, n = base, 2
-        while self.fs.exists(f"{AGENTS_DIR}/{agent_id}.json"):
-            agent_id = f"{base}-{n}"
-            n += 1
-        look = dict(DEFAULT_AVATAR)
-        if avatar:
-            if avatar.get("shape") is not None:
-                if avatar["shape"] not in AVATAR_SHAPES:
-                    raise AgentError(f"unknown avatar shape {avatar['shape']!r}")
-                look["shape"] = avatar["shape"]
-            if avatar.get("color") is not None:
-                if avatar["color"] not in AVATAR_COLORS:
-                    raise AgentError(f"unknown avatar color {avatar['color']!r}")
-                look["color"] = avatar["color"]
-        agent = {"id": agent_id, "name": name, "instructions": instructions,
-                 "model": model or None, "tools": grants, "avatar": look,
-                 "created": time.time()}
-        self.fs.write_file(f"{AGENTS_DIR}/{agent_id}.json",
-                           json.dumps(agent, indent=2))
-        return agent
 
-    def get(self, agent_id: str) -> dict[str, Any]:
+        # The name check and file write form one critical section. Without it,
+        # parallel same-name requests can choose the same suffix and overwrite
+        # one another even though CrowFS writes use unique temporary files.
+        with self.lock:
+            agent_id, n = base, 2
+            while self.fs.exists(f"{AGENTS_DIR}/{agent_id}.json"):
+                agent_id = f"{base}-{n}"
+                n += 1
+            agent = {
+                "id": agent_id,
+                "name": name,
+                "instructions": instructions,
+                "model": model,
+                "tools": grants,
+                "avatar": look,
+                "created": time.time(),
+            }
+            self.fs.write_file(
+                f"{AGENTS_DIR}/{agent_id}.json",
+                json.dumps(agent, indent=2),
+            )
+            return agent
+
+    def _read_definition(self, agent_id: str) -> dict[str, Any]:
         try:
-            return json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
+            raw = json.loads(self.fs.read_file(f"{AGENTS_DIR}/{agent_id}.json"))
         except FSError:
             raise AgentError(f"unknown agent: {agent_id}") from None
         except OSError:
-            # Round 27: a very long agent id makes the OS refuse the
-            # path itself (ENAMETOOLONG) before CrowFS can report "no
-            # such file" — that OSError escaped agents.get, and the
-            # /api/federation/run handler does not catch it, so the
-            # client saw a dropped connection instead of a 400. A
-            # lookup that cannot read the definition is an unknown
-            # agent, whatever the OS reason.
             raise AgentError(f"unknown agent: {agent_id}") from None
         except json.JSONDecodeError:
             raise AgentError(f"corrupt agent definition: {agent_id}") from None
 
+        if not isinstance(raw, dict):
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        # Hand-edited definitions may predate optional display fields. Retain
+        # readable, least-privileged definitions; never infer additional grants.
+        if not isinstance(raw.get("name"), str) or not raw["name"].strip():
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        if not isinstance(raw.get("instructions"), str):
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        stored_id = raw.get("id", agent_id)
+        if stored_id != agent_id:
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        model = raw.get("model")
+        if model is not None and not isinstance(model, str):
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        grants = raw.get("tools", [])
+        if not isinstance(grants, list) or any(not isinstance(item, str) for item in grants):
+            raise AgentError(f"corrupt agent definition: {agent_id}")
+        created = raw.get("created", 0)
+        if not isinstance(created, (int, float)) or isinstance(created, bool):
+            created = 0
+        avatar = raw.get("avatar")
+        if not isinstance(avatar, dict):
+            avatar = dict(DEFAULT_AVATAR)
+        else:
+            avatar = dict(DEFAULT_AVATAR) | {
+                "shape": avatar.get("shape") if avatar.get("shape") in AVATAR_SHAPES else DEFAULT_AVATAR["shape"],
+                "color": avatar.get("color") if avatar.get("color") in AVATAR_COLORS else DEFAULT_AVATAR["color"],
+            }
+        return {
+            "id": agent_id,
+            "name": raw["name"].strip(),
+            "instructions": raw["instructions"],
+            "model": model,
+            "tools": list(dict.fromkeys(grants)),
+            "avatar": avatar,
+            "created": created,
+        }
+
+    def get(self, agent_id: str) -> dict[str, Any]:
+        if not _valid_agent_id(agent_id):
+            raise AgentError(f"unknown agent: {agent_id}")
+        with self.lock:
+            return self._read_definition(agent_id)
+
     def list(self) -> list[dict[str, Any]]:
-        out = []
-        for e in self.fs.list_dir(AGENTS_DIR):
-            if e["type"] == "file" and e["name"].endswith(".json"):
-                try:
-                    out.append(self.get(e["name"][:-5]))
-                except AgentError:
-                    continue
-        return sorted(out, key=lambda a: a["created"])
+        with self.lock:
+            out = []
+            for entry in self.fs.list_dir(AGENTS_DIR):
+                if entry["type"] == "file" and entry["name"].endswith(".json"):
+                    agent_id = entry["name"][:-5]
+                    if not _valid_agent_id(agent_id):
+                        continue
+                    try:
+                        out.append(self._read_definition(agent_id))
+                    except AgentError:
+                        continue
+            return sorted(out, key=lambda agent: (agent["created"], agent["id"]))
 
     def delete(self, agent_id: str) -> None:
-        # Round 28: take the registry lock so a delete cannot land
-        # inside a federated dispatch's validate -> record -> attest
-        # sequence (see server.py /api/federation/run). A delete that
-        # arrives first makes the dispatch refuse cleanly (400, body
-        # never recorded); a delete that arrives after validation
-        # waits, and the dispatch then runs with the agent as it was
-        # validated — the captured definition, not a re-fetch by id.
+        # Keep delete ordered with dispatch validation and creation.
+        if not _valid_agent_id(agent_id):
+            raise AgentError(f"unknown agent: {agent_id}")
+        if agent_id in RESERVED:
+            raise AgentError(f"cannot delete reserved agent: {agent_id}")
         with self.lock:
-            real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
-            if not real.exists():
-                raise AgentError(f"unknown agent: {agent_id}")
-            real.unlink()
+            try:
+                real = self.fs.resolve(f"{AGENTS_DIR}/{agent_id}.json")
+                if not real.is_file():
+                    raise AgentError(f"unknown agent: {agent_id}")
+                real.unlink()
+            except FSError:
+                raise AgentError(f"unknown agent: {agent_id}") from None
+            except OSError:
+                raise AgentError(f"unknown agent: {agent_id}") from None
