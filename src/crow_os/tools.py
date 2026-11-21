@@ -18,9 +18,11 @@ So the network tools here are built like everything else in Crow OS:
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 from urllib.parse import urlparse
@@ -44,8 +46,29 @@ def _ip_blocked(ip_text: str) -> bool:
         ip = ipaddress.ip_address(ip_text)
     except ValueError:
         return True
-    return (ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
+
+    # Do not rely only on is_private: Python correctly reports CGNAT
+    # (100.64/10) as neither private nor globally routable.
+    if not ip.is_global:
+        return True
+    if isinstance(ip, ipaddress.IPv6Address):
+        mapped = ip.ipv4_mapped
+        if mapped is not None and _ip_blocked(str(mapped)):
+            return True
+        six_to_four = ip.sixtofour
+        if six_to_four is not None and _ip_blocked(str(six_to_four)):
+            return True
+        # Well-known NAT64 embeds an IPv4 destination in the low 32 bits.
+        if ip in ipaddress.ip_network("64:ff9b::/96"):
+            embedded = ipaddress.IPv4Address(int(ip) & 0xffffffff)
+            if _ip_blocked(str(embedded)):
+                return True
+        # Local-use translation and Teredo are not accepted as public origins.
+        if ip in ipaddress.ip_network("64:ff9b:1::/48"):
+            return True
+        if ip in ipaddress.ip_network("2001::/32"):
+            return True
+    return False
 
 
 def _resolve_checked(host: str, allow_private: bool) -> list[str]:
@@ -64,15 +87,111 @@ def _resolve_checked(host: str, allow_private: bool) -> list[str]:
     return ips
 
 
+def _pinned_create_connection(
+    host: str,
+    port: int,
+    addresses: list[str],
+    timeout: float | None = None,
+    source_address: tuple[str, int] | None = None,
+) -> socket.socket:
+    """Connect to a previously validated literal IP without resolving host again."""
+    errors: list[OSError] = []
+    for address_text in addresses:
+        try:
+            address = ipaddress.ip_address(address_text.split("%", 1)[0])
+        except ValueError as exc:
+            raise ToolError("validated address became invalid") from exc
+        family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        if timeout is not None:
+            sock.settimeout(timeout)
+        try:
+            if source_address:
+                sock.bind(source_address)
+            sockaddr = ((str(address), port, 0, 0) if address.version == 6
+                        else (str(address), port))
+            # Passing a numeric sockaddr directly is the security boundary:
+            # socket.connect does not call getaddrinfo for the hostname.
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            errors.append(exc)
+            sock.close()
+    if errors:
+        raise errors[-1]
+    raise ToolError(f"{host} has no validated address to connect to")
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, addresses: list[str], **kwargs):
+        self._pinned_addresses = addresses
+        super().__init__(host, **kwargs)
+
+    def connect(self):
+        self.sock = _pinned_create_connection(
+            self.host, self.port, self._pinned_addresses,
+            timeout=self.timeout, source_address=self.source_address)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, addresses: list[str], **kwargs):
+        self._pinned_addresses = addresses
+        super().__init__(host, **kwargs)
+
+    def connect(self):
+        raw = _pinned_create_connection(
+            self.host, self.port, self._pinned_addresses,
+            timeout=self.timeout, source_address=self.source_address)
+        if self._tunnel_host:
+            self.sock = raw
+            self._tunnel()
+            raw = self.sock
+        self.sock = self._context.wrap_socket(
+            raw, server_hostname=self._tunnel_host or self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pins: dict[str, list[str]]):
+        super().__init__()
+        self._pins = pins
+
+    def http_open(self, request):
+        host = urllib.parse.urlsplit(request.full_url).hostname
+        addresses = self._pins.get(host or "")
+        if not addresses:
+            raise ToolError("refusing an HTTP connection without a validated address")
+        return self.do_open(
+            lambda target, **kwargs: _PinnedHTTPConnection(target, addresses, **kwargs),
+            request)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pins: dict[str, list[str]]):
+        super().__init__()
+        self._pins = pins
+
+    def https_open(self, request):
+        host = urllib.parse.urlsplit(request.full_url).hostname
+        addresses = self._pins.get(host or "")
+        if not addresses:
+            raise ToolError("refusing an HTTPS connection without a validated address")
+        return self.do_open(
+            lambda target, **kwargs: _PinnedHTTPSConnection(target, addresses, **kwargs),
+            request, context=self._context, check_hostname=self._check_hostname)
+
+
 class _GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def __init__(self, allow_private: bool):
+    def __init__(self, allow_private: bool, pins: dict[str, list[str]]):
         super().__init__()
         self._allow_private = allow_private
+        self._pins = pins
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        host = urlparse(newurl).hostname
-        if host:
-            _resolve_checked(host, self._allow_private)
+        parsed = urllib.parse.urlsplit(newurl)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ToolError("redirect target is not an HTTP(S) URL with a host")
+        self._pins[parsed.hostname] = _resolve_checked(
+            parsed.hostname, self._allow_private)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -105,9 +224,14 @@ class ToolRunner:
         host = parsed.hostname
         if not host:
             raise ToolError("URL has no host")
-        _resolve_checked(host, self.allow_private)
+        pins = {host: _resolve_checked(host, self.allow_private)}
+        # Disable ambient proxies and dial the validated address directly.
+        # Redirects add a freshly validated pin before the next connection.
         opener = urllib.request.build_opener(
-            _GuardedRedirectHandler(self.allow_private))
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPHandler(pins),
+            _PinnedHTTPSHandler(pins),
+            _GuardedRedirectHandler(self.allow_private, pins))
         req = urllib.request.Request(
             url, headers={"User-Agent": "CrowOS/0.6 net.fetch"})
         try:
