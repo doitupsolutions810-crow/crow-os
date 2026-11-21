@@ -173,14 +173,14 @@ def make_handler(home: HomeServer):
             except Exception as error:  # noqa: BLE001 - never drop a request thread
                 self._server_error(error)
 
-        def _do_POST(self):  # noqa: N802
+        def do_POST(self):  # noqa: N802
             self._response_started = False
             try:
                 self._do_POST()
             except Exception as error:  # noqa: BLE001 - never drop a request thread
                 self._server_error(error)
 
-        def _do_DELETE(self):  # noqa: N802
+        def do_DELETE(self):  # noqa: N802
             self._response_started = False
             try:
                 self._do_DELETE()
@@ -293,7 +293,7 @@ def make_handler(home: HomeServer):
             else:
                 self._json(404, {"error": "not found"})
 
-        def do_DELETE(self):  # noqa: N802
+        def _do_DELETE(self):  # noqa: N802
             u = urlparse(self.path)
             if u.path.startswith("/api/routines/"):
                 from .routines import RoutineError
@@ -318,7 +318,7 @@ def make_handler(home: HomeServer):
                     return self._json(404, {"error": str(e)})
             return self._json(404, {"error": "not found"})
 
-        def do_POST(self):  # noqa: N802
+        def _do_POST(self):  # noqa: N802
             u = urlparse(self.path)
             if u.path == "/api/agents":
                 from .agents import AgentError
