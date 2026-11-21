@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import hmac
 import json
 import os
 import queue
@@ -40,6 +43,13 @@ def create_app(
     ingest_on_startup: bool = True,
 ) -> FastAPI:
     repo = Path(repo_root).resolve() if repo_root else default_repo()
+    auth_required = os.environ.get("CROW_AUTH_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+    auth_username = os.environ.get("CROW_AUTH_USERNAME", "crow")
+    auth_password = os.environ.get("CROW_AUTH_PASSWORD", "")
+    if auth_required and (not auth_username or ":" in auth_username or not auth_password):
+        raise RuntimeError(
+            "CROW_AUTH_REQUIRED needs CROW_AUTH_USERNAME (without ':') and a non-empty CROW_AUTH_PASSWORD"
+        )
     home = Path(os.environ.get("CROW_HOME") or PACKAGE_ROOT)
     database = Path(db_path) if db_path else home / "var" / "crow.sqlite"
     trees = Path(worktree_root) if worktree_root else Path(os.environ.get("CROW_WORKTREES") or "/tmp/crow-os-worktrees")
@@ -56,6 +66,38 @@ def create_app(
 
     app = FastAPI(title="Crow-OS AVRONE Workspace", lifespan=lifespan)
     app.state.workspace = workspace
+    app.state.auth_required = auth_required
+
+    @app.middleware("http")
+    async def protect_workspace(request: Request, call_next):
+        # /api/health reveals no repository or host details and is used by Docker's
+        # healthcheck. Everything else, including static assets and SSE streams, is
+        # protected when the Docker deployment enables Basic authentication.
+        if auth_required and request.url.path != "/api/health":
+            header = request.headers.get("authorization", "")
+            scheme, _, encoded = header.partition(" ")
+            valid = False
+            if scheme.lower() == "basic" and encoded:
+                try:
+                    decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+                    supplied_user, separator, supplied_password = decoded.partition(":")
+                    valid = bool(separator) and hmac.compare_digest(supplied_user, auth_username)
+                    valid = valid and hmac.compare_digest(supplied_password, auth_password)
+                except (binascii.Error, UnicodeDecodeError, ValueError):
+                    valid = False
+            if not valid:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "authentication required"},
+                    headers={"WWW-Authenticate": 'Basic realm="Crow OS", charset="UTF-8"'},
+                )
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
     app.state.ingest_on_startup = ingest_on_startup
 
     @app.exception_handler(VerificationRejected)
@@ -84,7 +126,7 @@ def create_app(
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "repo": str(workspace.repo)}
+        return {"ok": True}
 
     @app.get("/api/overview")
     def overview():
