@@ -290,6 +290,13 @@ class FileTools:
 
     def write(self, vpath: str, content: str) -> dict[str, Any]:
         self.broker.authorize(self.cap, "TOOL", "fs.write")
+        # Agent-granted fs.write is not authority to mutate the OS's own
+        # identity, tool-grant registry, or configuration. Resolve through
+        # CrowFS first so traversal and in-root symlinks are canonicalized.
+        target = self.fs.resolve(vpath)
+        system_dir = self.fs.resolve("/system")
+        if target == system_dir or system_dir in target.parents:
+            raise ToolError("the /system directory is read-only to agents")
         result = self.fs.write_file(vpath, content)
         record = {"tool": "fs.write", "path": result["path"],
                   "bytes": result["bytes"]}
