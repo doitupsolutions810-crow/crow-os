@@ -26,7 +26,7 @@ import re
 import threading
 import time
 import unicodedata
-from typing import Any
+from typing import Any, Callable, Iterable
 
 from .fs import CrowFS, FSError
 from .tools import TOOLS
@@ -81,7 +81,26 @@ class AgentRegistry:
         # for a job that never ran). An RLock: the handler re-enters
         # through federation_receive's own agents.get.
         self.lock = threading.RLock()
+        self._extra_tools_provider: Callable[[], Iterable[str]] = lambda: ()
         self.fs.mkdir(AGENTS_DIR)
+
+    def set_extra_tools_provider(self, provider: Callable[[], Iterable[str]]) -> None:
+        """Attach the current trusted connector catalog supplied by the kernel."""
+        if not callable(provider):
+            raise TypeError("extra tool provider must be callable")
+        self._extra_tools_provider = provider
+
+    def _tool_catalog(self) -> set[str]:
+        catalog = set(TOOLS)
+        try:
+            provided = self._extra_tools_provider()
+        except Exception:
+            # A connector registry error must not widen permissions.
+            provided = ()
+        if isinstance(provided, (list, tuple, set)):
+            catalog.update(item for item in provided
+                           if isinstance(item, str) and item and not _has_control_chars(item))
+        return catalog
 
     def create(self, name: str, instructions: str,
                model: str | None = None,
@@ -116,9 +135,14 @@ class AgentRegistry:
 
         if tools is not None and not isinstance(tools, list):
             raise AgentError("tools must be a list of tool names")
-        if extra_tools is not None and not isinstance(extra_tools, list):
-            raise AgentError("extra_tools must be a list of tool names")
-        catalog = TOOLS + list(extra_tools or [])
+        if extra_tools is not None:
+            if not isinstance(extra_tools, list) or any(not isinstance(item, str) for item in extra_tools):
+                raise AgentError("extra_tools must be a list of tool names")
+        catalog = self._tool_catalog()
+        # The kernel owns the connector catalog. A caller-supplied list may
+        # describe that catalog but can never expand it.
+        if extra_tools is not None and any(item not in catalog for item in extra_tools):
+            raise AgentError("extra_tools contains a tool outside the trusted catalog")
         grants: list[str] = []
         for tool in tools or []:
             if not isinstance(tool, str) or not tool or _has_control_chars(tool):
@@ -197,6 +221,9 @@ class AgentRegistry:
         grants = raw.get("tools", [])
         if not isinstance(grants, list) or any(not isinstance(item, str) for item in grants):
             raise AgentError(f"corrupt agent definition: {agent_id}")
+        catalog = self._tool_catalog()
+        if any(item not in catalog for item in grants):
+            raise AgentError(f"agent definition contains an unregistered tool: {agent_id}")
         created = raw.get("created", 0)
         if not isinstance(created, (int, float)) or isinstance(created, bool):
             created = 0
