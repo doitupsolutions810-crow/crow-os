@@ -103,8 +103,8 @@ def _pinned_create_connection(
             raise ToolError("validated address became invalid") from exc
         family = socket.AF_INET6 if address.version == 6 else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_STREAM)
-        if timeout is not None:
-            sock.settimeout(timeout)
+        if isinstance(timeout, (int, float)):
+            sock.settimeout(float(timeout))
         try:
             if source_address:
                 sock.bind(source_address)
