@@ -172,3 +172,64 @@ MCP download layer; "Avrone-only" / "Daemon-only" are the line-bag differences.
 | `tests/test_tool_secrets.py` | 69 | 69 | 1 | 1 | cosmetic |
 | `tests/test_tool_state_health.py` | 91 | 93 | 0 | 2 | cosmetic |
 | `tools/make_master_prompt.py` | 196 | 194 | 4 | 2 | cosmetic |
+
+---
+
+## Tier-1 port completion (W1 execution, PR avrone-daemon#90)
+
+All four tier-1 items from the open-ports list above are resolved as of the
+`port/w1-tier1-platform-bridge` merge into avrone-daemon `main`
+(merge commit `84c841fbf0b137570a7517de43714dd8b242d081`, previously based on
+`3a1fbc19c867449a3b781f4dc9557b694cd7c974`).
+
+### 1. `avrone/bridge.py` blackboard fan-in: superseded, no port needed
+Re-examination of the daemon trunk showed the port target already exists in a
+better form. The daemon extracted Avrone's monolithic blackboard section into
+`avrone/fusion_blackboard.py` with full contract parity, confirmed by reading
+both sides:
+
+| Avrone `bridge.py` element | Daemon equivalent |
+| --- | --- |
+| post normalization + validation | `normalize_blackboard_post` |
+| `blackboard_posts` / acceptance flow | `blackboard_posts`, `blackboard_accept` |
+| cross-run fan-in ordering | persistent `_fanin_order.json` with `_load_order` / `_save_order` |
+| tombstones | tombstone set carried in the same persistence file |
+| `GET /api/blackboard` / `POST /api/blackboard` | `server.py` routes with 413-before-auth, BOM strip, admin token + `AVRONE_ADMIN_TOKEN_PREVIOUS` grace |
+
+The daemon side additionally ships `tests/test_fusion_blackboard.py` (22 KB),
+which covers the whole Avrone contract. Conclusion: the one file where Avrone
+was the superset was already absorbed by the canonical trunk.
+
+### 2-4. Real gaps, ported in PR #90
+The remaining three items were genuine gaps and are now closed (tests are not
+executed in this sandbox; validation rides on daemon CI):
+
+1. `plugins/platform_bridge.py` ported verbatim from the Avrone freeze tree
+   (verified self-contained against the daemon: only `httpx` and
+   `avrone.tools.Tool` imports; daemon `load_plugins` signature and
+   `avrone_plugin_<stem>` module naming are compatible). Its test pair came
+   with it: `tests/test_platform_bridge.py` (byte-identical to Avrone) and
+   `tests/test_platform_bridge_hardening.py`.
+2. `.env.example`: platform-bridge env block appended
+   (`AVRONE_PLATFORM_TARGETS_JSON`, `AVRONE_PLATFORM_WRITE_ENABLED=false`,
+   `AVRONE_BRIDGE_*` knobs). Present on merged main as blob
+   `9182e8a70c03df89f2d84b58a9156089bb21d27d`.
+3. `tests/test_robust_v027_access.py`: `test_non_ascii_token_is_refused`
+   added (Avrone-only regression; daemon `server.caller_allowed` and
+   `require_admin` confirmed as the code under test).
+4. `tests/test_tool_env_report.py`: `test_json_and_prefix` gained a d3 block
+   asserting that a set `AVRONE_ADMIN_TOKEN_PREVIOUS` is reported as
+   presence-only (`***set***`) in both env and settings, with the secret value
+   itself absent from the JSON dump.
+
+### Ledger
+Receipted in `attested-history/history.jsonl` seq 5 (`w1_tier1_ports`,
+digest `7c1467aee604ec93f94cff18d49c8ae139a454997a2f477443cdcf21a8d150a3`),
+chained after a seq 4 digest repair (stored seq 4 digest did not verify under
+the canonical writer algorithm; content and links unchanged). Full 6-entry
+chain re-verified after the push.
+
+### Remaining for W1 close-out (owner-manual)
+- Flip Avrone to read-only in GitHub repo settings (no API capability for the
+  visibility/permission flip in this toolset).
+- Archive the 12 zero-risk repos listed in `docs/W1_TRAIN_TRIAGE.md`.
