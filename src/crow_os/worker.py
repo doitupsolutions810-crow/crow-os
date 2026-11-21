@@ -91,14 +91,47 @@ class LLMWorker:
                 f"Plan reference line: plan:{job_id}",
                 on_token=(lambda t: outputs[job_id].__setitem__(
                     "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
-            state = self.workflow.report(job_id, "coder", bool(artifact.strip()),
-                                         f"artifact chars={len(artifact)}")
+            plan_reference = f"plan:{job_id}"
+            if plan_reference not in artifact:
+                # Small local models sometimes omit the mandatory reference.
+                # Give the coder exactly one constrained correction opportunity;
+                # the tester still independently enforces the reference.
+                self.ledger.append("crow-os", "coder.repair", {
+                    "job_id": job_id,
+                    "attempt": 1,
+                    "reason": "missing plan reference line",
+                    "artifact_chars": len(artifact),
+                })
+                if outputs is not None:
+                    outputs[job_id]["live"] = ""
+                previous_artifact = artifact
+                artifact = self.client.chat_stream(
+                    PROMPTS["coder"],
+                    f"Objective: {objective}\\nPlan:\\n{plan}\\n{context}"
+                    f"Plan reference line: {plan_reference}\\n"
+                    "Your previous artifact omitted the required plan reference. "
+                    "Return the corrected artifact, preserving its useful content, "
+                    f"and include the exact literal line `# {plan_reference}` "
+                    "on its own line. Do not invent or alter the reference.\\n"
+                    f"Previous artifact:\\n{previous_artifact}",
+                    on_token=(lambda t: outputs[job_id].__setitem__(
+                        "live", outputs[job_id].get("live", "") + t)) if outputs is not None else None)
+            reference_present = plan_reference in artifact
             if outputs is not None:
                 outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
                 outputs[job_id]["plan"] = plan
                 outputs[job_id]["artifact"] = artifact
+            passed = bool(artifact.strip()) and reference_present
+            note = (f"artifact chars={len(artifact)}; "
+                    f"plan reference line {'present' if reference_present else 'missing'}")
+            state = self.workflow.report(job_id, "coder", passed, note)
             if state["status"] == "failed":
-                return state
+                failed = dict(state)
+                if not reference_present:
+                    failed["error"] = "plan reference line missing after one repair attempt"
+                elif not artifact.strip():
+                    failed["error"] = "coder returned an empty artifact"
+                return failed
 
             # tester (deterministic: criteria actually checked)
             role = "tester"
