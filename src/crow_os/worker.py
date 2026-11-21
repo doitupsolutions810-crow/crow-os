@@ -121,10 +121,22 @@ class LLMWorker:
                 outputs.setdefault(job_id, {"plan": "", "artifact": "", "live": ""})
                 outputs[job_id]["plan"] = plan
                 outputs[job_id]["artifact"] = artifact
-            passed = bool(artifact.strip()) and reference_present
+            # The coder stage establishes that an artifact was produced.
+            # Reference integrity remains the tester's deterministic gate.
+            passed = bool(artifact.strip())
             note = (f"artifact chars={len(artifact)}; "
                     f"plan reference line {'present' if reference_present else 'missing'}")
             state = self.workflow.report(job_id, "coder", passed, note)
+            if state["status"] == "failed":
+                failed = dict(state)
+                failed["error"] = "coder returned an empty artifact"
+                return failed
+
+            # tester (deterministic: criteria actually checked)
+            role = "tester"
+            checks = [reference_present, bool(artifact.strip())]
+            state = self.workflow.report(job_id, "tester", all(checks),
+                                         f"criteria {sum(checks)}/{len(checks)}")
             if state["status"] == "failed":
                 failed = dict(state)
                 if not reference_present:
@@ -132,14 +144,6 @@ class LLMWorker:
                 elif not artifact.strip():
                     failed["error"] = "coder returned an empty artifact"
                 return failed
-
-            # tester (deterministic: criteria actually checked)
-            role = "tester"
-            checks = [f"plan:{job_id}" in artifact, len(artifact.strip()) > 0]
-            state = self.workflow.report(job_id, "tester", all(checks),
-                                         f"criteria {sum(checks)}/{len(checks)}")
-            if state["status"] == "failed":
-                return state
 
             # governance (deterministic: ledger must verify)
             role = "governance"
